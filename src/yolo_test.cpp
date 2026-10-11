@@ -5,19 +5,17 @@ int main() {
     YoloDetector det("/home/badtime/sp_vision_25/assets/yolo11.xml", 0.4f, 0.3f);
     cv::VideoCapture cap("/home/badtime/sp_vision_25/assets/demo/demo.avi");
     cv::Mat frame;
-    int id = 0;
-    while (true) {
-        cap >> frame;
-        if (frame.empty()) break;
-        auto boxes = det.detect(frame);
-        if (id % 10 == 0) {
-            printf("frame %d: %d boxes", id, (int)boxes.size());
-            for (auto& b : boxes)
-                printf(" [x=%d y=%d w=%d h=%d s=%.2f]",
-                       b.rect.x, b.rect.y, b.rect.width, b.rect.height, b.score);
-            printf("\n");
+    for (int i = 0; i < 30; i++) cap >> frame;
+    auto boxes = det.detect(frame);
+    std::cout << "boxes: " << boxes.size() << "\n";
+    for (auto& b : boxes) {
+        cv::rectangle(frame, b.rect, cv::Scalar(0,255,0), 2);
+        for (size_t k = 0; k < b.corners.size(); k++) {
+            cv::circle(frame, b.corners[k], 5, cv::Scalar(0,0,255), -1);
+            cv::putText(frame, std::to_string(k), b.corners[k]+cv::Point2f(5,-5),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0,0,255), 2);
         }
-        id++;
     }
+    cv::imwrite("/home/badtime/my_aim/yolo_corners.jpg", frame);
     return 0;
 }

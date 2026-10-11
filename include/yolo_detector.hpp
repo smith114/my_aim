@@ -1,4 +1,4 @@
-// yolo_detector.hpp: OpenVINO YOLO11 装甲板检测 (对齐同济预处理)
+// yolo_detector.hpp: OpenVINO YOLO11 装甲板检测 (带4角点)
 #pragma once
 #include <opencv2/opencv.hpp>
 #include <openvino/openvino.hpp>
@@ -9,6 +9,7 @@
 struct YoloBox {
     cv::Rect rect;
     float score;
+    std::vector<cv::Point2f> corners;  // 装甲板4角点
 };
 
 class YoloDetector {
@@ -23,7 +24,6 @@ public:
             .set_layout("NHWC")
             .set_color_format(ov::preprocess::ColorFormat::BGR);
         input.model().set_layout("NCHW");
-        // 关键: uint8->f32, BGR->RGB, /255
         input.preprocess()
             .convert_element_type(ov::element::f32)
             .convert_color(ov::preprocess::ColorFormat::RGB)
@@ -34,7 +34,6 @@ public:
     }
 
     std::vector<YoloBox> detect(const cv::Mat& bgr) {
-        // letterbox 左上对齐, 黑色填充
         double scale = std::min(640.0/bgr.rows, 640.0/bgr.cols);
         int h = bgr.rows * scale, w = bgr.cols * scale;
         cv::Mat input(640, 640, CV_8UC3, cv::Scalar(0,0,0));
@@ -50,8 +49,11 @@ public:
         cv::transpose(output, output);
 
         constexpr int CLASS_NUM = 38;
+        // 列: 0-3=xywh, 4-41=38类分数, 42-49=4角点(x,y)
+        std::vector<YoloBox> results;
         std::vector<cv::Rect> boxes;
         std::vector<float> scores;
+        std::vector<std::vector<cv::Point2f>> all_corners;
 
         for (int i = 0; i < output.rows; i++) {
             float cx = output.at<float>(i,0);
@@ -64,7 +66,15 @@ public:
                 if (s > max_score) max_score = s;
             }
             if (max_score < conf_thresh_) continue;
-            // 坐标: 模型输出在640x640上, 除以scale回原图
+
+            // 角点: 列 42~49, 每两个一组
+            std::vector<cv::Point2f> corners;
+            for (int k = 0; k < 4; k++) {
+                float px = output.at<float>(i, 42 + k*2);
+                float py = output.at<float>(i, 42 + k*2 + 1);
+                corners.push_back(cv::Point2f(px/scale, py/scale));
+            }
+
             cv::Rect r;
             r.x = (cx - ww/2) / scale;
             r.y = (cy - hh/2) / scale;
@@ -72,15 +82,18 @@ public:
             r.height = hh / scale;
             r &= cv::Rect(0, 0, bgr.cols, bgr.rows);
             if (r.width < 5 || r.height < 5) continue;
+
             boxes.push_back(r);
             scores.push_back(max_score);
+            all_corners.push_back(corners);
         }
 
         std::vector<int> indices;
         cv::dnn::NMSBoxes(boxes, scores, conf_thresh_, nms_thresh_, indices);
-        std::vector<YoloBox> result;
-        for (int idx : indices) result.push_back({boxes[idx], scores[idx]});
-        return result;
+        for (int idx : indices) {
+            results.push_back({boxes[idx], scores[idx], all_corners[idx]});
+        }
+        return results;
     }
 
 private:
