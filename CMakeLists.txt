@@ -64,6 +64,11 @@ aim_link(my_aim)
 add_executable(calibrate src/calibrate.cpp)
 aim_link(calibrate)
 
+# ---------------------------------------------------------------- 云台诊断
+# 不用手推云台就能读出当前实测姿态、单步走、或软件扫描找限位
+add_executable(gimbal_test src/gimbal_test.cpp)
+aim_link(gimbal_test)
+
 # ---------------------------------------------------------------- 离线推理自检
 # 用图片验证 YOLO/OpenVINO 环境是否可用, 不依赖相机
 find_package(OpenVINO QUIET)

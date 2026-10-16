@@ -24,6 +24,12 @@ add_executable(synth_dump synth_dump.cpp)
 target_link_libraries(synth_dump PRIVATE ${OpenCV_LIBS})
 target_include_directories(synth_dump PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
+# detect_probe 支持 --cam / --hold, 需要相机 SDK 与串口
+set(HIK_INCLUDE ${CMAKE_SOURCE_DIR}/thirdparty/hikrobot/include)
 add_executable(detect_probe ${CMAKE_SOURCE_DIR}/src/detect_probe.cpp)
-target_link_libraries(detect_probe PRIVATE ${OpenCV_LIBS})
-target_include_directories(detect_probe PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(detect_probe PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${HIK_INCLUDE})
+target_link_libraries(detect_probe PRIVATE
+  ${OpenCV_LIBS} ${HIK_LINK_LIB} Threads::Threads)
+set_target_properties(detect_probe PROPERTIES
+  BUILD_RPATH "${HIK_RPATH}" INSTALL_RPATH "${HIK_RPATH}")

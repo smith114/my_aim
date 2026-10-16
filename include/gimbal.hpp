@@ -53,6 +53,9 @@ public:
         if (!inited_) {
             cmd_yaw   = yaw;
             cmd_pitch = pitch;
+            // 记录启动姿态, 作为安全包络的中心
+            home_yaw   = yaw;
+            home_pitch = pitch;
             inited_    = true;
         }
     }
@@ -78,6 +81,7 @@ public:
         cmd_pitch = step_toward(cmd_pitch, want_pitch, SERVO_MAX_STEP);
         cmd_yaw   = wrap_or_clamp_yaw(cmd_yaw);
         cmd_pitch = clamp_val(cmd_pitch, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
+        apply_envelope();   // 再套一层安全包络
         return true;
     }
 
@@ -85,21 +89,25 @@ public:
     bool manual_yaw(float d) {
         cmd_yaw = wrap_or_clamp_yaw(cmd_yaw + d);
         sm_yaw_ = 0.0f;
+        apply_envelope();
         return true;
     }
     bool manual_pitch(float d) {
         cmd_pitch = clamp_val(cmd_pitch + d, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
         sm_pitch_ = 0.0f;
+        apply_envelope();
         return true;
     }
 
-    // 无目标时三角波摆扫寻板
+    // 无目标时在启动姿态附近三角波摆扫寻板
     bool scan() {
         if (++scan_cnt_ < GIMBAL_SCAN_HOLD) return false;
         cmd_yaw = wrap_or_clamp_yaw(cmd_yaw + scan_dir_ * GIMBAL_SCAN_SPEED);
         const float half = GIMBAL_SCAN_AMP * 0.5f;
-        if (cmd_yaw > 90.0f + half) scan_dir_ = -1.0f;
-        if (cmd_yaw < 90.0f - half) scan_dir_ =  1.0f;
+        const float dy = wrap_delta(cmd_yaw - home_yaw);
+        if (dy >  half) scan_dir_ = -1.0f;
+        if (dy < -half) scan_dir_ =  1.0f;
+        apply_envelope();
         return true;
     }
     void reset_scan() {
@@ -108,6 +116,29 @@ public:
     }
 
     void stop_tracking() { tracking = false; }
+
+    float home_yaw   = 0.0f;   // 启动姿态(安全包络中心)
+    float home_pitch = 0.0f;
+
+    // 安全包络: 命令角不允许离启动姿态超过 ENVELOPE 度。
+    //
+    // 为什么需要它: 云台的真实角量程事先不知道(协议没规定, 固件还会再限位)。
+    // 但控制律锚在实测角上, 本身不会主动往限位撞, 所以只要再加一圈"别跑太远"
+    // 的软保护就够了 —— 比去猜一个绝对区间可靠得多。
+    // 真出问题时(比如符号错), 云台最多在启动姿态附近小幅晃动, 不会一路转到底。
+    void apply_envelope() {
+        const float dy = wrap_delta(cmd_yaw - home_yaw);
+        if (dy >  GIMBAL_ENVELOPE_DEG) cmd_yaw = wrap360(home_yaw + GIMBAL_ENVELOPE_DEG);
+        if (dy < -GIMBAL_ENVELOPE_DEG) cmd_yaw = wrap360(home_yaw - GIMBAL_ENVELOPE_DEG);
+        cmd_pitch = clamp_val(cmd_pitch, home_pitch - GIMBAL_ENVELOPE_DEG,
+                                          home_pitch + GIMBAL_ENVELOPE_DEG);
+    }
+
+    // 查询/调试用: 直接给一个绝对命令角(绕过包络, 供 gimbal_test 工具使用)
+    void force_set(float yaw, float pitch) {
+        cmd_yaw   = yaw;
+        cmd_pitch = pitch;
+    }
 
     // 开机自检: 判断 SERVO_DIR 是否正确。
     // 原理: 按当前方向发一个 yaw 命令, 若光轴真的朝目标转了, 下一帧的偏差角
@@ -160,6 +191,13 @@ private:
     float scan_dir_ = 1.0f;
     int   scan_cnt_ = 0;
     int   dir_bad_streak_ = 0;
+
+    // 把角度差规整到 (-180, 180], 用于跨 0/360 的比较
+    static float wrap_delta(float d) {
+        while (d >  180.0f) d -= 360.0f;
+        while (d <= -180.0f) d += 360.0f;
+        return d;
+    }
 };
 
 }  // namespace srm

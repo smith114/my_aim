@@ -1,17 +1,28 @@
 // detect_probe.cpp: 检测链路诊断工具
 //
-// 对一张图跑 灯条提取 -> 装甲板配对 -> PnP, 把中间结果全部打印出来,
-// 并输出带标注的调试图。用于回答"为什么这一帧没检出目标"。
+// 对一张图(或实相机当前帧)跑 灯条提取 -> 装甲板配对 -> PnP,
+// 把中间结果全部打印出来, 并输出带标注的调试图。
+// 用于回答"为什么这一帧没检出目标"。
 //
-// 用法: ./detect_probe <图片|视频> [输出图] [--frames N]
+// 用法:
+//   ./detect_probe <图片|视频> [输出图] [--frames N] [-v]
+//   ./detect_probe --cam [输出图] [-v]                 实相机抓一帧分析
+//   ./detect_probe --cam --hold YAW PITCH [输出图] [-v] 先把云台转到该角再抓
+//
+// --hold 模式会持续发送该角度直到抓帧完成, 用于"云台停在这里看看画面里有什么"。
 #include <cstdio>
+#include <cstdlib>
+#include <chrono>
 #include <iostream>
 #include <string>
+#include <thread>
 
 #include <opencv2/opencv.hpp>
 
 #include "armor.hpp"
 #include "config.hpp"
+#include "hik_camera.hpp"
+#include "protocol.hpp"
 #include "solver.hpp"
 
 using namespace srm;
@@ -26,38 +37,108 @@ static void apply_img_dir(cv::Mat& f) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::cerr << "用法: detect_probe <图片|视频> [输出图] [--frames N]\n";
-        return 2;
-    }
-    const std::string input = argv[1];
-    std::string output = (argc > 2 && argv[2][0] != '-') ? argv[2] : "/tmp/probe_out.jpg";
-    int frames = 1;
-    bool verbose = false;
-    for (int i = 2; i < argc; ++i) {
-        if (std::string(argv[i]) == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
-        if (std::string(argv[i]) == "-v") verbose = true;
+    std::string input;
+    std::string output = "/tmp/probe_out.jpg";
+    int   frames   = 1;
+    bool  verbose  = false;
+    bool  use_cam  = false;
+    bool  hold     = false;
+    float hold_yaw = 0.0f, hold_pitch = 0.0f;
+    std::string bayer_arg;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--cam") {
+            use_cam = true;
+        } else if (a == "--hold" && i + 2 < argc) {
+            hold = true;
+            hold_yaw   = std::atof(argv[++i]);
+            hold_pitch = std::atof(argv[++i]);
+        } else if (a == "--frames" && i + 1 < argc) {
+            frames = std::atoi(argv[++i]);
+        } else if (a == "--bayer" && i + 1 < argc) {
+            bayer_arg = argv[++i];
+        } else if (a == "-v") {
+            verbose = true;
+        } else if (a == "-h" || a == "--help") {
+            std::cout << "用法:\n"
+                         "  detect_probe <图片|视频> [输出图] [--frames N] [-v]\n"
+                         "  detect_probe --cam [输出图] [-v]\n"
+                         "  detect_probe --cam --hold YAW PITCH [输出图] [-v]\n";
+            return 0;
+        } else if (!a.empty() && a[0] != '-') {
+            if (input.empty() && !use_cam) input = a;
+            else                             output = a;
+        }
     }
 
     cv::Mat frame;
-    const bool is_video = input.size() > 4 && (input.substr(input.size() - 4) == ".mp4" ||
-                                               input.substr(input.size() - 4) == ".avi");
-    if (is_video) {
-        cv::VideoCapture cap(input);
-        if (!cap.isOpened()) {
-            std::cerr << "打不开视频\n";
+    HikCamera cam;
+    SerialLink link;
+
+    if (use_cam) {
+        // 可选: 先把云台转到指定角度再抓帧
+        int fd = -1;
+        if (hold) {
+            fd = open_first_available({SERIAL_BY_ID, SERIAL_FALLBACK0, SERIAL_FALLBACK1});
+            if (fd < 0) {
+                std::cerr << "[ERR] --hold 需要下位机串口, 但打不开\n";
+                return 1;
+            }
+            link.start(fd, SERIAL_SEND_HZ, SERIAL_WATCHDOG_MS, SERIAL_SHUTDOWN_ZERO_FRAMES);
+            RxState st;
+            for (int i = 0; i < 300; ++i) {
+                st = link.state();
+                if (st.valid) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            for (int i = 0; i < 60; ++i) {
+                link.set_target(hold_yaw, hold_pitch, 0);
+                std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            }
+            st = link.state();
+            std::printf("[HOLD] cmd=%.2f/%.2f  fb=%.2f/%.2f  mode=%d\n", hold_yaw, hold_pitch,
+                        st.yaw, st.pitch, st.mode);
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+        if (!bayer_arg.empty()) cam.set_bayer(HikCamera::bayer_from_name(bayer_arg));
+        if (!cam.open()) {
+            std::cerr << "[ERR] 相机打不开\n";
             return 1;
         }
-        for (int i = 0; i < frames; ++i) cap >> frame;
+        for (int i = 0; i < 90; ++i) {
+            if (cam.read(frame)) break;
+        }
+        if (frame.empty()) {
+            std::cerr << "[ERR] 抓不到帧\n";
+            return 1;
+        }
+    } else if (input.empty()) {
+        std::cerr << "用法: detect_probe <图片|视频> [输出图] [--frames N] [-v]\n"
+                     "      detect_probe --cam --hold YAW PITCH [输出图] [-v]\n";
+        return 2;
     } else {
-        frame = cv::imread(input, cv::IMREAD_COLOR);
+        const bool is_video =
+            input.size() > 4 && (input.substr(input.size() - 4) == ".mp4" ||
+                                 input.substr(input.size() - 4) == ".avi");
+        if (is_video) {
+            cv::VideoCapture cap(input);
+            if (!cap.isOpened()) {
+                std::cerr << "打不开视频\n";
+                return 1;
+            }
+            for (int i = 0; i < frames; ++i) cap >> frame;
+        } else {
+            frame = cv::imread(input, cv::IMREAD_COLOR);
+        }
     }
     if (frame.empty()) {
         std::cerr << "读不到输入\n";
         return 1;
     }
-    apply_img_dir(frame);
-    std::printf("图像 %dx%d, IMG_DIR=%d\n", frame.cols, frame.rows, IMG_DIR);
+    if (!use_cam) apply_img_dir(frame);
+    std::printf("图像 %dx%d, IMG_DIR=%d%s\n", frame.cols, frame.rows, IMG_DIR,
+                use_cam ? " (实相机, bayer 已由相机模块处理)" : "");
 
     // ---------------------------------------------------------- 逐级过滤统计
     if (verbose) {
@@ -157,5 +238,7 @@ int main(int argc, char** argv) {
     }
     cv::imwrite(output, frame);
     std::printf("\n标注图已存: %s\n", output.c_str());
+    link.stop();
+    cam.close();
     return 0;
 }
