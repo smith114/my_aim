@@ -72,8 +72,15 @@ assets/yolo11.xml|bin   YOLO11 OpenVINO 模型
 
 ## 3. 构建
 
-依赖：CMake ≥ 3.16、GCC（C++17）、OpenCV 4、pthread。
+依赖：CMake ≥ 3.16、GCC（C++17）、OpenCV 4、pthread、**完整的海康 MVS SDK**。
 主程序不依赖 OpenVINO（YOLO 是可选分支）。
+
+> **必须装完整版 MVS SDK（默认 `/opt/MVS`）。**
+> 项目自带的 `thirdparty/hikrobot/lib/libMvCameraControl.so` 只有 6.9 MB，
+> **不带 USB3 Vision 传输层**，`MV_CC_EnumDevices` 会返回 `nDeviceNum=0`
+> —— 表现为"`lsusb` 能看到相机，程序却说没相机"。
+> CMake 会优先链接 `/opt/MVS/lib/64`，找不到才回退并打 WARNING。
+> 确认实际链接的是哪个：`ldd ./build/my_aim | grep -i mv`。
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -81,7 +88,7 @@ cmake --build build -j2          # WSL 内存紧, 用 -j2
 ```
 
 产物：`build/my_aim`、`build/calibrate`、`build/tests/*`。
-海康 SDK 通过 RPATH 定位，不需要装到系统里。
+头文件用项目自带的（与系统 SDK 同为 4.7.0.3，ABI 一致）。
 
 ### 跑测试（不需要相机、不需要下位机、不需要实车）
 
@@ -121,31 +128,51 @@ ctest --test-dir build --output-on-failure
 
 ---
 
-## 5. 上车前必须确认的三件事
+## 5. 上车前必须确认的四件事
 
-### ① 云台角范围与方向符号 `SERVO_DIR`
+### ① 云台角量程（**当前最不确定的一项**）
 
-协议层只规定 yaw/pitch 是"角度制"，没说量程；下位机固件还会再限位。
-`config.hpp` 里现在按 **0~360（大于 359 视为允许整圈）** 处理 yaw、
-**0~180** 处理 pitch，**这必须实机确认**。
+协议只说"角度制"，没说量程。**实机实测回传值是负的**（`yaw=-90.6, pitch=-38.3`），
+所以旧注释里"0~180，中间 90 = 镜头朝前"是错的。
+
+现在 `config.hpp` 按"不做人为限位"处理（yaw 整圈、pitch ±180），
+把保护交给下位机的机械限位（规则 3.3 节：机械限位由下位机保证）。
+**实测出真实量程后请改成精确区间**，这样异常指令能更早被发现。
+
+### ② 云台方向符号 `SERVO_DIR`
 
 `SERVO_DIR` 表示"增大 yaw 命令时，目标在画面里朝哪边移动"：
 
 - `+1`：目标在画面右侧时需要增大 yaw
 - `-1`：反之
 
+控制律是 `期望角 = 实测角 + SERVO_DIR × 偏差角`，**锚在下位机实测角上**，
+所以即使符号反了也不会发散（只会绕不动/来回摆），比旧版"自己积分估计角"安全得多。
+
 程序默认开启自检（`auto_dir_check`）：按当前方向转一帧后如果偏差角反而变大，
-就自动翻转 `SERVO_DIR` 并在日志里打 `[DIR] SERVO_DIR 反了, 已自动翻转`。
-想手动固定就用 `--no-dir-check`。
+就自动翻转并打日志 `[DIR] SERVO_DIR 反了, 已自动翻转`。想手动固定用 `--no-dir-check`。
 
-**首次上车务必低速验证**：确认云台朝目标方向转、不会一路顶到限位。
+**首次上车务必低速验证。**
 
-### ② 图像方向 `IMG_DIR`
+### ③ 相机 Bayer 相位
+
+传感器输出 Bayer 原始格式，相位判错会让颜色彻底反过来，蓝/红灯条的色调分割直接失效。
+**自动判定在实机上不可靠**（三种判据互相矛盾，详见 `DEBUG_LOG.md`），所以：
+
+```bash
+./build/my_aim --bayer rg        # 或 bg / gr / gb
+# 窗口里也可以按 T 键循环切换
+```
+
+判对错的快捷办法：对蓝靶标跑 `detect_probe -v`，看灯条 BGR 均值是否 B 明显大于 G 和 R。
+默认值见 `config.hpp` 的 `BAYER_DEFAULT_NAME`。
+
+### ④ 图像方向 `IMG_DIR`
 
 `0=原样 1=水平翻转 2=垂直翻转 3=旋转180`。当前是 **3**（2026-10-15 实机试出）。
 测试里用 `-DIMG_DIR_OVERRIDE=0` 覆盖，因为合成图是正的。
 
-### ③ 相机内参与光照阈值
+### 附：相机内参与光照阈值
 
 内参是 2026-10-15 标定值（重投影误差 0.097 px）。换镜头/重新对焦后必须重标：
 
