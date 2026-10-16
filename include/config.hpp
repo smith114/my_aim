@@ -78,10 +78,16 @@ constexpr float SERVO_MAX_STEP  = 2.0f;   // 每帧最大转动(度), 防大偏�
 constexpr float GIMBAL_SMOOTH   = 0.35f;  // 偏差角低通系数
 constexpr float GIMBAL_DEADBAND = 0.5f;   // 死区(度), 消极限环摆动
 constexpr float GIMBAL_MANUAL_STEP = 1.5f;// 手动控制步长(度/次)
-constexpr float GIMBAL_YAW_MIN   = 0.0f;  // 云台 yaw 角下限(度)
-constexpr float GIMBAL_YAW_MAX   = 360.0f;// 上限 >= 359 表示允许整圈
-constexpr float GIMBAL_PITCH_MIN = 0.0f;
-constexpr float GIMBAL_PITCH_MAX = 180.0f;
+
+// 云台角量程 —— 实机实测(2026-10-16)回传值是**负的**(yaw=-90.6, pitch=-38.3),
+// 所以旧注释里"协议 0~180, 中间 90 = 镜头朝前"是错的, 不能照抄。
+// 现在按"接近整圈、不做人为限位"处理: yaw 允许整圈, pitch 放宽到 ±180,
+// 让下位机自己的机械限位去做保护(规则第 3.3 节: 机械限位由下位机保证)。
+// 一旦实测出真实量程, 改成精确区间能更早发现异常指令。
+constexpr float GIMBAL_YAW_MIN   = 0.0f;
+constexpr float GIMBAL_YAW_MAX   = 360.0f;   // >= 359 表示按整圈处理(wrap)
+constexpr float GIMBAL_PITCH_MIN = -180.0f;
+constexpr float GIMBAL_PITCH_MAX =  180.0f;
 
 // 无目标时云台摆扫寻板
 constexpr float GIMBAL_SCAN_AMP   = 90.0f;  // 扫描幅度(度)
@@ -109,6 +115,20 @@ constexpr const char* SERIAL_FALLBACK1 = "/dev/ttyACM1";
 // ============================================================ 开火
 // 中期不发射: fire_flag 恒 0。终验开火须同时满足下位机火控与人工许可
 constexpr bool ENABLE_FIRE = false;
+
+// ============================================================ 相机 Bayer 相位
+// 传感器输出的是 Bayer 原始格式, 去马赛克的相位判错会让颜色彻底反过来,
+// 蓝/红灯条的色调分割就失效了。
+//
+// 实机结论(2026-10-16): **自动判定不可靠**, 三种判据在同一台相机同一场景下
+// 给出互相矛盾的答案(详见 hik_camera.hpp 的注释)。所以这里固定一个默认值,
+// 现场用 `--bayer rg|bg|gr|gb` 覆盖, 或在窗口里按 T 键逐个试,
+// 以"实车看到的颜色正确"为准。
+//
+// 判对错的快捷办法: 对着靶标跑 `detect_probe -v`, 看灯条的 BGR 均值是不是
+// 目标色通道明显占优(蓝靶标应满足 B >> G 且 B >> R)。
+// 当前默认 "bg": 沿用 10-15 实机验证过的值, 但仍需在实车前用蓝靶标复核。
+#define BAYER_DEFAULT_NAME "bg"
 
 // ============================================================ 标定
 // 棋盘格: DFvision 012-400-30, 格子边长 30 mm (型号尾数 = 30)

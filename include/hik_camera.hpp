@@ -2,8 +2,11 @@
 #pragma once
 #include <opencv2/opencv.hpp>
 #include <MvCameraControl.h>
-#include <iostream>
 #include <cstring>
+#include <iostream>
+#include <string>
+
+#include "config.hpp"
 
 static const char* fmt_name(int f) {
     switch (f) {
@@ -20,50 +23,83 @@ static const char* fmt_name(int f) {
 
 class HikCamera {
 public:
-    HikCamera() : handle_(nullptr), grabbing_(false), fmt_(-1), bayer_code_(-1), bayer_detected_(false) {}
+    // Bayer 相位名, 用于日志
+    static const char* bayer_code_name(int code) {
+        switch (code) {
+            case cv::COLOR_BayerRG2BGR: return "rg";
+            case cv::COLOR_BayerBG2BGR: return "bg";
+            case cv::COLOR_BayerGR2BGR: return "gr";
+            case cv::COLOR_BayerGB2BGR: return "gb";
+            default:                    return "?";
+        }
+    }
 
-    // 循环切换 Bayer 转 BGR 模式, 实机颜色反时按T试到正确
+    // 名字 -> OpenCV Bayer 转换码, 无法识别时回退到 config 里的默认值
+    static int bayer_from_name(const std::string& n) {
+        if (n == "rg") return cv::COLOR_BayerRG2BGR;
+        if (n == "bg") return cv::COLOR_BayerBG2BGR;
+        if (n == "gr") return cv::COLOR_BayerGR2BGR;
+        if (n == "gb") return cv::COLOR_BayerGB2BGR;
+        std::cerr << "[BAYER] 无法识别的相位名 '" << n << "', 用默认 "
+                  << BAYER_DEFAULT_NAME << "\n";
+        if (std::string(BAYER_DEFAULT_NAME) == "rg") return cv::COLOR_BayerRG2BGR;
+        if (std::string(BAYER_DEFAULT_NAME) == "gr") return cv::COLOR_BayerGR2BGR;
+        if (std::string(BAYER_DEFAULT_NAME) == "gb") return cv::COLOR_BayerGB2BGR;
+        return cv::COLOR_BayerBG2BGR;
+    }
+
+    HikCamera() : handle_(nullptr), grabbing_(false), fmt_(-1),
+                  bayer_code_(bayer_from_name(BAYER_DEFAULT_NAME)) {}
+
+    // 启动时指定 Bayer 相位(--bayer 参数), 覆盖 config.hpp 的默认值
+    void set_bayer(int code) {
+        bayer_code_ = code;
+        std::cout << "[BAYER] 使用 " << bayer_code_name(code) << "\n";
+    }
+
+    // 循环切换 Bayer 转 BGR 模式, 实机颜色不对时按 T 逐个试
     void cycle_bayer() {
         static const int codes[] = {
             cv::COLOR_BayerRG2BGR, cv::COLOR_BayerBG2BGR,
             cv::COLOR_BayerGR2BGR, cv::COLOR_BayerGB2BGR
         };
-        static const char* names[] = {"RG", "BG", "GR", "GB"};
         int idx = 0;
         for (int i = 0; i < 4; i++) if (codes[i] == bayer_code_) idx = i;
         idx = (idx + 1) % 4;
         bayer_code_ = codes[idx];
-        std::cout << "[BAYER] switch to " << names[idx] << "\n";
+        std::cout << "[BAYER] switch to " << bayer_code_name(bayer_code_) << "\n";
     }
 
-    // 第一帧自动探测正确Bayer模式: 4种转换统计蓝/红像素数, 最多者颜色最饱和(正确转换)
-    static int detect_bayer_code(const cv::Mat& bay) {
-        static const int codes[4] = { cv::COLOR_BayerRG2BGR, cv::COLOR_BayerBG2BGR,
-                                      cv::COLOR_BayerGR2BGR, cv::COLOR_BayerGB2BGR };
-        static const char* names[4] = {"RG", "BG", "GR", "GB"};
-        int best = codes[0], best_cnt = -1, best_i = 0;
-        for (int i = 0; i < 4; i++) {
-            cv::Mat bgr, hsv;
-            cv::cvtColor(bay, bgr, codes[i]);
-            cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);
-            cv::Mat bm, r1, r2, rm;
-            cv::inRange(hsv, cv::Scalar(100, 80, 60), cv::Scalar(130, 255, 255), bm);
-            cv::inRange(hsv, cv::Scalar(0, 80, 60), cv::Scalar(10, 255, 255), r1);
-            cv::inRange(hsv, cv::Scalar(170, 80, 60), cv::Scalar(180, 255, 255), r2);
-            cv::bitwise_or(r1, r2, rm);
-            int cnt = cv::countNonZero(bm) + cv::countNonZero(rm);
-            if (cnt > best_cnt) { best_cnt = cnt; best = codes[i]; best_i = i; }
-        }
-        std::cout << "[BAYER] auto-detect -> " << names[best_i] << " (pix=" << best_cnt << ")\n";
-        return best;
-    }
+    // Bayer 相位的自动判定 —— 结论: 在实机上**不可靠**, 不要依赖它。
+    //
+    // 试过三种判据, 在同一台相机、同一场景下都会给出不同答案:
+    //   1) "哪种转换解出的蓝/红像素最多" -> 两次运行分别给出 RG 和 BG
+    //   2) "去马赛克后 corr(R,G) 最小"   -> 灰阶场景下四种排列都是 -1, 无法区分
+    //   3) "同色相邻列方差最小"          -> colΔ 偶/奇 = 4.96/5.33, 差异只有噪声量级
+    //
+    // 所以改成: 取 config.hpp 里的 BAYER_DEFAULT_NAME 作为默认值, 现场用
+    // --bayer 覆盖, 或者运行中按 T 键逐个试, 以**实车看到的颜色**为准。
+    // 判对错最直接的办法: 对着蓝靶标跑 `detect_probe -v`,
+    // 看灯条 BGR 均值是否满足 B 明显大于 G 和 R。
 
     bool open() {
         MV_CC_DEVICE_INFO_LIST devices;
         memset(&devices, 0, sizeof(devices));
         int ret = MV_CC_EnumDevices(MV_USB_DEVICE, &devices);
-        if (ret != MV_OK || devices.nDeviceNum == 0) {
-            std::cerr << "[HIK] no camera found\n";
+        if (ret != MV_OK) {
+            std::cerr << "[HIK] MV_CC_EnumDevices 失败 ret=0x" << std::hex << ret << std::dec
+                      << "\n";
+            return false;
+        }
+        if (devices.nDeviceNum == 0) {
+            // 这个错误最常见的真实原因不是"没插相机", 而是链到了不带 USB3 传输层的
+            // 精简版 libMvCameraControl.so (只有几 MB 的那种)。完整版在 /opt/MVS。
+            std::cerr << "[HIK] 枚举到 0 个相机。排查顺序:\n"
+                         "  1) lsusb | grep -i hikrobot   看看 USB 层有没有认到相机\n"
+                         "  2) 上面这条有、这里却是 0 -> 多半是链接了精简版 SDK;\n"
+                         "     完整 MVS 在 /opt/MVS/lib/64, 用 ldd 确认实际加载的是哪个:\n"
+                         "       ldd ./build/my_aim | grep -i mv\n"
+                         "  3) 确认 /dev/bus/usb/*/* 对本用户可读写, 或把用户加进 video 组\n";
             return false;
         }
         std::cout << "[HIK] found " << devices.nDeviceNum << " camera(s)\n";
@@ -107,10 +143,8 @@ public:
         MV_CC_SetEnumValue(handle_, "ExposureAuto", 2);  // 2=Continuous
         MV_CC_SetEnumValue(handle_, "GainAuto", 2);
 
-        // 实机实测(2026-10-15): 固定 BayerBG2BGR 颜色正确
-        // 海康SDK Bayer命名与OpenCV标准相反: SDK的RG8数据实际是BGGR布局
-        // T键可现场切换兜底 (cycle_bayer)
-        bayer_code_ = cv::COLOR_BayerBG2BGR;
+        std::cout << "[BAYER] 初始相位 " << bayer_code_name(bayer_code_)
+                  << " (颜色不对按 T 键切换, 或用 --bayer rg|bg|gr|gb 指定)\n";
 
         ret = MV_CC_StartGrabbing(handle_);
         if (ret != MV_OK) {
@@ -150,11 +184,7 @@ public:
         case PixelType_Gvsp_BayerBG8:
         case PixelType_Gvsp_BayerGR8:
         case PixelType_Gvsp_BayerGB8: {
-            cv::Mat bay(h, w, CV_8UC1, fi.pBufAddr);
-            if (!bayer_detected_) {   // 第一帧自动探测正确Bayer模式(不再猜)
-                bayer_code_ = detect_bayer_code(bay);
-                bayer_detected_ = true;
-            }
+            const cv::Mat bay(h, w, CV_8UC1, fi.pBufAddr);
             cv::cvtColor(bay, frame, bayer_code_);
             break;
         }
@@ -184,20 +214,11 @@ public:
     ~HikCamera() { close(); }
 
     // 当前 Bayer 转换模式名, 便于日志确认
-    const char* bayer_name() const {
-        switch (bayer_code_) {
-            case cv::COLOR_BayerRG2BGR: return "RG";
-            case cv::COLOR_BayerBG2BGR: return "BG";
-            case cv::COLOR_BayerGR2BGR: return "GR";
-            case cv::COLOR_BayerGB2BGR: return "GB";
-            default:                    return "?";
-        }
-    }
+    const char* bayer_name() const { return bayer_code_name(bayer_code_); }
 
 private:
     void* handle_;
     bool grabbing_;
     int fmt_;
     int bayer_code_;       // cvtColor Bayer code, T键现场切换
-    bool bayer_detected_;  // 第一帧自动探测已完成
 };

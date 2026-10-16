@@ -95,6 +95,7 @@ int main(int argc, char** argv) {
     bool save_video  = false;
     bool dir_autocheck = true;   // 默认开启 SERVO_DIR 自检
     int  max_frames  = 0;
+    std::string bayer_name_arg;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -108,6 +109,8 @@ int main(int argc, char** argv) {
             save_video = true;
         } else if (a == "--no-dir-check") {
             dir_autocheck = false;
+        } else if (a == "--bayer" && i + 1 < argc) {
+            bayer_name_arg = argv[++i];
         } else if (a == "--snapshot-dir" && i + 1 < argc) {
             snapshot_dir = argv[++i];
         } else if (a == "--log" && i + 1 < argc) {
@@ -116,9 +119,11 @@ int main(int argc, char** argv) {
             max_frames = std::atoi(argv[++i]);
         } else if (a == "-h" || a == "--help") {
             std::cout << "用法: my_aim [--debug] [--headless] [--mock] [--save-video]\n"
-                         "              [--no-dir-check] [--snapshot-dir DIR] [--log FILE]\n"
+                         "              [--no-dir-check] [--bayer rg|bg|gr|gb]\n"
+                         "              [--snapshot-dir DIR] [--log FILE]\n"
                          "              [--frames N] [video|image]\n"
-                         "  --no-dir-check  关闭云台 SERVO_DIR 自动纠正(默认开启)\n";
+                         "  --no-dir-check  关闭云台 SERVO_DIR 自动纠正(默认开启)\n"
+                         "  --bayer         指定相机 Bayer 相位(默认见 config.hpp)\n";
             return 0;
         } else {
             input_path = a;
@@ -158,12 +163,15 @@ int main(int argc, char** argv) {
             LOG("[INPUT] video %s\n", input_path.c_str());
         }
     } else {
+        if (!bayer_name_arg.empty()) {
+            hik.set_bayer(HikCamera::bayer_from_name(bayer_name_arg));
+        }
         if (!hik.open()) {
             LOG("[ERR] 海康相机打开失败, 退出\n");
             return 1;
         }
         use_hik = true;
-        LOG("[INPUT] Hik camera\n");
+        LOG("[INPUT] Hik camera (bayer=%s)\n", hik.bayer_name());
     }
 
     // ---------------------------------------------------------- 串口

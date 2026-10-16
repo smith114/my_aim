@@ -15,12 +15,31 @@ find_package(OpenCV REQUIRED)
 find_package(Threads REQUIRED)
 
 # ---------------------------------------------------------------- 海康 MVS SDK
-# 项目自带 SDK 头文件与 .so, 用 RPATH 定位, 不需要装到系统里
-set(HIK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/hikrobot)
-set(HIK_INCLUDE ${HIK_DIR}/include)
-set(HIK_LIB     ${HIK_DIR}/lib)
-if(NOT EXISTS ${HIK_LIB}/libMvCameraControl.so)
-  message(FATAL_ERROR "缺少 ${HIK_LIB}/libMvCameraControl.so")
+# 重要发现(2026-10-16 在 NUC 上实测):
+#   项目自带的 thirdparty/hikrobot/lib/libMvCameraControl.so 只有 6.9 MB,
+#   它**只是 API 外壳**, 不带 USB3 Vision 传输层, MV_CC_EnumDevices 返回
+#   ret=0x80000006 且 nDeviceNum=0 —— 明明 lsusb 能看到相机却枚举不到。
+#   系统安装的 /opt/MVS/lib/64 是完整包(带 libMvUsb3vTL.so 和 MvProducerU3V.cti),
+#   同一个程序链上它 ret=0 nDeviceNum=1, 正常。
+# 所以优先用系统 MVS 的动态库; 头文件仍可用项目自带的(SDK 版本同是 4.7.0.3)。
+set(HIK_SYS_LIB_DIR "/opt/MVS/lib/64" CACHE PATH "系统 MVS 动态库目录")
+set(HIK_SYS_LIB     "${HIK_SYS_LIB_DIR}/libMvCameraControl.so")
+set(HIK_BUNDLED_LIB "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/hikrobot/lib/libMvCameraControl.so")
+set(HIK_INCLUDE     "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/hikrobot/include")
+
+if(EXISTS ${HIK_SYS_LIB})
+  set(HIK_LINK_LIB ${HIK_SYS_LIB})
+  set(HIK_RPATH     ${HIK_SYS_LIB_DIR})
+  message(STATUS "海康 SDK: 使用系统 MVS (${HIK_SYS_LIB}) —— 带 USB3 传输层")
+elseif(EXISTS ${HIK_BUNDLED_LIB})
+  set(HIK_LINK_LIB ${HIK_BUNDLED_LIB})
+  set(HIK_RPATH     "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/hikrobot/lib")
+  message(WARNING
+    "海康 SDK: 未找到系统 MVS (${HIK_SYS_LIB}), 回退到项目自带版本。\n"
+    "  项目自带版本缺少 USB3 Vision 传输层, 会枚举不到相机(返回 nDeviceNum=0)。\n"
+    "  请安装完整 MVS SDK (默认装到 /opt/MVS), 或用 -DHIK_SYS_LIB_DIR=... 指定路径。")
+else()
+  message(FATAL_ERROR "找不到 libMvCameraControl.so, 请安装海康 MVS SDK")
 endif()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -30,11 +49,11 @@ include_directories(${HIK_INCLUDE})
 function(aim_link target)
   target_link_libraries(${target} PRIVATE
     ${OpenCV_LIBS}
-    ${HIK_LIB}/libMvCameraControl.so
+    ${HIK_LINK_LIB}
     Threads::Threads)
   set_target_properties(${target} PROPERTIES
-    BUILD_RPATH   "${HIK_LIB}"
-    INSTALL_RPATH "${HIK_LIB}")
+    BUILD_RPATH   "${HIK_RPATH}"
+    INSTALL_RPATH "${HIK_RPATH}")
 endfunction()
 
 # ---------------------------------------------------------------- 主程序
