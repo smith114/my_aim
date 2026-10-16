@@ -93,7 +93,8 @@ int main(int argc, char** argv) {
     bool headless    = false;
     bool force_mock  = false;
     bool save_video  = false;
-    bool dir_autocheck = true;   // 默认开启 SERVO_DIR 自检
+    // 无目标时是否自动摆扫。默认关闭, 见 config.hpp 的 ENABLE_AUTO_SCAN 说明。
+bool auto_scan = ENABLE_AUTO_SCAN;
     int  max_frames  = 0;
     std::string bayer_name_arg;
 
@@ -107,8 +108,8 @@ int main(int argc, char** argv) {
             force_mock = true;
         } else if (a == "--save-video") {
             save_video = true;
-        } else if (a == "--no-dir-check") {
-            dir_autocheck = false;
+        } else if (a == "--scan") {
+            auto_scan = true;
         } else if (a == "--bayer" && i + 1 < argc) {
             bayer_name_arg = argv[++i];
         } else if (a == "--snapshot-dir" && i + 1 < argc) {
@@ -119,10 +120,12 @@ int main(int argc, char** argv) {
             max_frames = std::atoi(argv[++i]);
         } else if (a == "-h" || a == "--help") {
             std::cout << "用法: my_aim [--debug] [--headless] [--mock] [--save-video]\n"
-                         "              [--no-dir-check] [--bayer rg|bg|gr|gb]\n"
+                         "              [--scan] [--bayer rg|bg|gr|gb]\n"
                          "              [--snapshot-dir DIR] [--log FILE]\n"
                          "              [--frames N] [video|image]\n"
-                         "  --no-dir-check  关闭云台 SERVO_DIR 自动纠正(默认开启)\n"
+                         "  --dir-check     开启 SERVO_DIR 自动纠正(默认关闭, 实测会误判)\n"
+                         "  --scan          无目标时自动摆扫找板(默认关闭: 操作手已手动对准,\n"
+                         "                  摆扫反而会把靶标转出画面)\n"
                          "  --bayer         指定相机 Bayer 相位(默认见 config.hpp)\n";
             return 0;
         } else {
@@ -218,6 +221,10 @@ int main(int argc, char** argv) {
         LOG("[GIMBAL] 等第一帧回传后再决定命令角(在此之前一帧都不发)\n");
     }
 
+    LOG("[GIMBAL] 无目标时%s (摆扫%s)\n",
+        auto_scan ? "自动摆扫找板" : "原地保持等目标",
+        auto_scan ? "已开启" : "默认关闭: 操作手已手动对准, 摆扫会把靶标转出画面");
+
     // ---------------------------------------------------------- 快照目录
     if ((headless || still_image) && !dir_exists(snapshot_dir)) {
         ::mkdir(snapshot_dir.c_str(), 0755);
@@ -232,6 +239,9 @@ int main(int argc, char** argv) {
     int    frame_cnt = 0;
     int    stat_bars = 0, stat_armor = 0, stat_solved = 0, stat_locked = 0;
     int    last_locked_frame = -100000;
+// 最近一次"画面里有候选装甲板"的帧号。摆扫的触发看它, 不看 last_locked_frame ——
+// 见下方云台段的说明(用 locked 判断会导致"没锁定就乱扫"的恶性循环)。
+int    last_candidate_frame = -100000;
     float  last_bullet_speed = BULLET_SPEED_DEFAULT;
 
     while (g_stop == 0) {
@@ -277,6 +287,7 @@ int main(int argc, char** argv) {
 
         // ------------------------------------------------ 跟踪
         const TrackResult tr = tracker.update(candidates);
+        if (!candidates.empty()) last_candidate_frame = frame_cnt;
         if (tr.locked && tr.index >= 0) {
             ++stat_locked;
             last_locked_frame = frame_cnt;
@@ -284,42 +295,69 @@ int main(int argc, char** argv) {
 
         // ------------------------------------------------ 云台 -> 串口
         float theta_yaw = 0.0f, theta_pitch = 0.0f;
-        if (tr.locked) {
+
+        // 选要跟的候选:
+        //   已锁定 -> 用跟踪器选中的那个(保持目标连续性)
+        //   未锁定但有候选 -> 直接选**离画面中心最近**的那个
+        //
+        // 为什么未锁定也要跟: 实测(10-16)发现"等 tracker 连续确认才驱动云台"
+        // 这个门槛太高 —— 检测逐帧抖动时很难满足确认条件, 云台就一直不动,
+        // 目标慢慢漂出画面, 然后彻底丢失。改成"只要有候选就先往它那儿转",
+        // 云台把目标往画面中心压, 检测反而更稳, 锁定是水到渠成的结果。
+        // 这也是常规做法: 跟踪器负责"跟哪一个 + 平滑", 而不是负责"要不要动"。
+        int follow = -1;
+        if (tr.locked && tr.index >= 0) {
+            follow = tr.index;
+        } else if (!candidates.empty()) {
+            float best = 1e9f;
+            const cv::Point2f img_c(static_cast<float>(frame.cols) * 0.5f,
+                                    static_cast<float>(frame.rows) * 0.5f);
+            for (size_t i = 0; i < candidates.size(); ++i) {
+                const float d = cv::norm(candidates[i].center - img_c);
+                if (d < best) {
+                    best = d;
+                    follow = static_cast<int>(i);
+                }
+            }
+        }
+
+        if (follow >= 0) {
             float pitch_comp = 0.0f;
             if (BALLISTIC_COMP_ENABLE) {
                 const RxState s = link.state();
                 const float v = s.has_bullet_speed ? s.bullet_speed : BULLET_SPEED_DEFAULT;
-                pitch_comp = ballistic_pitch_deg(tr.target.solve.dist, v);
+                pitch_comp = ballistic_pitch_deg(candidates[follow].solve.dist, v);
             }
-            theta_yaw   = tr.target.solve.yaw;
-            theta_pitch = tr.target.solve.pitch + pitch_comp;
+            theta_yaw   = candidates[follow].solve.yaw;
+            theta_pitch = candidates[follow].solve.pitch + pitch_comp;
 
             // 回传数据必须新鲜, 否则冻结命令(下位机侧已有看门狗兜底)
             if (const RxState s = link.state(); s.valid && s.age() < FEEDBACK_MAX_AGE_S) {
                 gimbal.update_feedback(s.yaw, s.pitch);
                 gimbal.track(theta_yaw, theta_pitch);
-                if (dir_autocheck) {
-                    // 自检: 若按当前方向转完偏差反而变大, 说明 SERVO_DIR 反了
-                    static float prev_theta = 0.0f;
-                    static float prev_cmd = 90.0f;
-                    if (gimbal.auto_dir_check(prev_theta, theta_yaw, gimbal.cmd_yaw - prev_cmd)) {
-                        LOG("[DIR] SERVO_DIR 反了, 已自动翻转 -> %.0f\n", gimbal.servo_dir);
-                    }
-                    prev_theta = theta_yaw;
-                    prev_cmd   = gimbal.cmd_yaw;
-                }
-                last_locked_frame = frame_cnt;
+                if (tr.locked) last_locked_frame = frame_cnt;
             } else {
                 LOG("[WARN] 回传数据过期(%.3fs), 云台冻结\n", s.age());
             }
         } else {
             gimbal.stop_tracking();
-            // 长时间没目标: 摆扫找回; 刚丢失则原地保持(继续发同一个角, 云台不动)
-            if (frame_cnt - last_locked_frame > GIMBAL_SCAN_HOLD) {
+            // 没有候选时的行为。
+            //
+            // 默认 **原地保持**, 不摆扫 —— 理由见 config.hpp 的 ENABLE_AUTO_SCAN:
+            // 操作手是先手动对准再进视觉模式的, 启动姿态就是靶标方向;
+            // 程序再自动摆扫只会把靶标转出画面, 实测就是这么丢掉目标的。
+            // 想自动搜索时用 --scan。
+            if (auto_scan && frame_cnt - last_candidate_frame > GIMBAL_SCAN_HOLD) {
                 if (const RxState s = link.state(); s.valid && s.age() < FEEDBACK_MAX_AGE_S) {
                     gimbal.update_feedback(s.yaw, s.pitch);
                 }
                 gimbal.scan();
+            } else {
+                // 原地保持: 每帧把实测角原样发回, 云台就停在这儿等目标回来。
+                // 注意不能不发 —— 不发会触发下位机看门狗。
+                if (const RxState s = link.state(); s.valid && s.age() < FEEDBACK_MAX_AGE_S) {
+                    gimbal.update_feedback(s.yaw, s.pitch);
+                }
             }
         }
 
@@ -362,14 +400,15 @@ int main(int argc, char** argv) {
         if (frame_cnt % 30 == 0) {
             const RxState s = link.state();
             LOG("[DET] f=%d bars=%.1f armor=%.1f solved=%.1f locked=%.1f state=%s "
-                "cmd=%.1f/%.1f fb=%.1f/%.1f home=%.1f/%.1f mode=%d th=%.1f/%.1f dir=%.0f "
-                "rx=%llu resync=%llu wd=%llu\n",
+                "cmd=%.1f/%.1f fb=%.1f/%.1f home=%.1f/%.1f mode=%d th=%.1f/%.1f "
+                "lock_age=%d rx=%llu resync=%llu wd=%llu\n",
                 frame_cnt, stat_bars / 30.0, stat_armor / 30.0, stat_solved / 30.0,
                 stat_locked / 30.0, tracker.state_name(), gimbal.cmd_yaw, gimbal.cmd_pitch,
                 s.valid ? s.yaw : 0.0f, s.valid ? s.pitch : 0.0f,
                 gimbal.home_yaw, gimbal.home_pitch,
                 s.valid ? s.mode : -1,
-                theta_yaw, theta_pitch, gimbal.servo_dir,
+                theta_yaw, theta_pitch,
+                frame_cnt - last_locked_frame,   // 距上次成功锁定过了多少帧
                 static_cast<unsigned long long>(link.rx_frames()),
                 static_cast<unsigned long long>(link.resync_drops()),
                 static_cast<unsigned long long>(link.watchdog_trips()));

@@ -139,9 +139,27 @@ public:
             std::cout << "[HIK] using pixel format = " << fmt_name(fmt_) << "\n";
         }
 
-        // 画面偏暗: 开自动曝光+自动增益 (失败不阻断, 相机若不支持自动忽略)
-        MV_CC_SetEnumValue(handle_, "ExposureAuto", 2);  // 2=Continuous
-        MV_CC_SetEnumValue(handle_, "GainAuto", 2);
+        // 曝光/增益: 默认用**固定值**, 不用连续自动。
+        // 实测(10-16)连续自动曝光在"暗背景 + 极亮 LED"的场景里会来回振荡,
+        // 表现为同一目标逐帧忽有忽无, 跟踪器因此咬不住锁。
+        if (srm::CAM_USE_AUTO_EXPOSURE) {
+            MV_CC_SetEnumValue(handle_, "ExposureAuto", 2);   // 2 = Continuous
+            MV_CC_SetEnumValue(handle_, "GainAuto", 2);
+            std::cout << "[HIK] 曝光: 连续自动 (不推荐, 易振荡)\n";
+        } else {
+            // 必须先把自动关掉, 否则手动值会被自动算法立刻覆盖
+            MV_CC_SetEnumValue(handle_, "ExposureAuto", 0);   // 0 = Off
+            MV_CC_SetEnumValue(handle_, "GainAuto", 0);
+            const int r1 = MV_CC_SetFloatValue(handle_, "ExposureTime",
+                                               srm::CAM_EXPOSURE_US);
+            const int r2 = MV_CC_SetFloatValue(handle_, "Gain", srm::CAM_GAIN_DB);
+            std::cout << "[HIK] 曝光: 固定 " << srm::CAM_EXPOSURE_US << " us, 增益 "
+                      << srm::CAM_GAIN_DB << " dB (ret=" << r1 << "/" << r2 << ")\n";
+            if (r1 != MV_OK || r2 != MV_OK) {
+                std::cerr << "[HIK] warn: 曝光/增益设置失败(ret=" << r1 << "/" << r2
+                          << "), 相机可能不支持手动模式\n";
+            }
+        }
 
         std::cout << "[BAYER] 初始相位 " << bayer_code_name(bayer_code_)
                   << " (颜色不对按 T 键切换, 或用 --bayer rg|bg|gr|gb 指定)\n";

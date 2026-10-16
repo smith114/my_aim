@@ -148,9 +148,13 @@ int main(int argc, char** argv) {
         std::cerr << "读不到输入\n";
         return 1;
     }
-    if (!use_cam) apply_img_dir(frame);
+    // 相机帧也要套 IMG_DIR —— main.cpp 的真实流程就是这么做的。
+    // 之前只对"图片/视频"套旋转, 相机帧漏了, 于是诊断工具看到的画面方向和主程序
+    // 不一致(表现为调试图上下颠倒), 坐标含义也对不上。180 度旋转不改变形状所以
+    // 检测结果本身差不多, 但一致性必须保证, 否则没法互相对照。
+    apply_img_dir(frame);
     std::printf("图像 %dx%d, IMG_DIR=%d%s\n", frame.cols, frame.rows, IMG_DIR,
-                use_cam ? " (实相机, bayer 已由相机模块处理)" : "");
+                use_cam ? " (实相机, bayer 由相机模块处理, 已套 IMG_DIR)" : "");
 
     // ---------------------------------------------------------- 逐级过滤统计
     if (verbose) {
