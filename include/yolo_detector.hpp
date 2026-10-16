@@ -1,20 +1,39 @@
-// yolo_detector.hpp: OpenVINO YOLO11 装甲板检测 (带4角点)
+// yolo_detector.hpp: OpenVINO YOLO11 装甲板检测器 (带 4 角点输出)
+//
+// 说明: 主流程用的是 armor.hpp 的全图灯条法, 这个模块是备选/对照方案。
+// 保留它的原因: (1) 可作为灯条法漏检时的补充;  (2) 已经过实测, 输出角点准确。
+//
+// 预处理与同济一致: BGR(u8) -> RGB -> /255, 缩放到 640x640, 左上角对齐填充。
+// 后处理输出布局(单输出张量, 转置后每行一个候选):
+//   [0..3]   cx, cy, w, h        (letterbox 后的 640 坐标系)
+//   [4..41]  38 类分数
+//   [42..49] 4 个角点 (x, y)
 #pragma once
+
+#include <iostream>
+#include <string>
+#include <vector>
+
 #include <opencv2/opencv.hpp>
 #include <openvino/openvino.hpp>
-#include <vector>
-#include <string>
-#include <iostream>
+
+namespace srm {
 
 struct YoloBox {
     cv::Rect rect;
-    float score;
-    std::vector<cv::Point2f> corners;  // 装甲板4角点
+    float    score = 0.0f;
+    std::vector<cv::Point2f> corners;   // 装甲板 4 角点(原图坐标)
 };
 
 class YoloDetector {
 public:
-    YoloDetector(const std::string& model_xml, float conf_thresh = 0.4f, float nms_thresh = 0.3f)
+    static constexpr int kInputSize = 640;
+    static constexpr int kClassNum  = 38;
+    static constexpr int kAttrStart = 4;                      // 类别分数起始列
+    static constexpr int kCornerStart = kAttrStart + kClassNum;  // 角点起始列 = 42
+
+    YoloDetector(const std::string& model_xml, float conf_thresh = 0.4f,
+                 float nms_thresh = 0.3f, const std::string& device = "CPU")
         : conf_thresh_(conf_thresh), nms_thresh_(nms_thresh) {
         auto model = core_.read_model(model_xml);
         ov::preprocess::PrePostProcessor ppp(model);
@@ -29,76 +48,88 @@ public:
             .convert_color(ov::preprocess::ColorFormat::RGB)
             .scale(255.0);
         model = ppp.build();
-        compiled_ = core_.compile_model(model, "CPU");
+        compiled_ = core_.compile_model(model, device);
         infer_request_ = compiled_.create_infer_request();
     }
 
     std::vector<YoloBox> detect(const cv::Mat& bgr) {
-        double scale = std::min(640.0/bgr.rows, 640.0/bgr.cols);
-        int h = bgr.rows * scale, w = bgr.cols * scale;
-        cv::Mat input(640, 640, CV_8UC3, cv::Scalar(0,0,0));
-        cv::resize(bgr, input(cv::Rect(0,0,w,h)), {w, h});
+        std::vector<YoloBox> results;
+        if (bgr.empty()) return results;
 
-        ov::Tensor input_tensor(ov::element::u8, {1,640,640,3}, input.data);
+        // 等比缩放到 640x640 画布, 左上角对齐
+        const double scale = std::min(static_cast<double>(kInputSize) / bgr.rows,
+                                      static_cast<double>(kInputSize) / bgr.cols);
+        const int w = static_cast<int>(bgr.cols * scale);
+        const int h = static_cast<int>(bgr.rows * scale);
+        cv::Mat canvas(kInputSize, kInputSize, CV_8UC3, cv::Scalar(0, 0, 0));
+        cv::resize(bgr, canvas(cv::Rect(0, 0, w, h)), {w, h});
+
+        ov::Tensor input_tensor(ov::element::u8, {1, kInputSize, kInputSize, 3}, canvas.data);
         infer_request_.set_input_tensor(input_tensor);
         infer_request_.infer();
 
-        auto out = infer_request_.get_output_tensor();
-        auto shape = out.get_shape();
-        cv::Mat output(shape[1], shape[2], CV_32F, out.data<float>());
-        cv::transpose(output, output);
+        const auto out = infer_request_.get_output_tensor();
+        const auto shape = out.get_shape();
+        // 期望 [1, N, 4+38+8]
+        if (shape.size() != 3) return results;
+        cv::Mat raw(static_cast<int>(shape[1]), static_cast<int>(shape[2]), CV_32F,
+                    out.data<float>());
+        cv::Mat output;
+        cv::transpose(raw, output);   // -> [attrs, N] 的转置 = [N, attrs]
+        if (output.cols < kCornerStart + 8) return results;
 
-        constexpr int CLASS_NUM = 38;
-        // 列: 0-3=xywh, 4-41=38类分数, 42-49=4角点(x,y)
-        std::vector<YoloBox> results;
         std::vector<cv::Rect> boxes;
-        std::vector<float> scores;
+        std::vector<float>    scores;
         std::vector<std::vector<cv::Point2f>> all_corners;
 
-        for (int i = 0; i < output.rows; i++) {
-            float cx = output.at<float>(i,0);
-            float cy = output.at<float>(i,1);
-            float ww = output.at<float>(i,2);
-            float hh = output.at<float>(i,3);
-            float max_score = 0;
-            for (int c = 4; c < 4+CLASS_NUM; c++) {
-                float s = output.at<float>(i,c);
+        for (int i = 0; i < output.rows; ++i) {
+            float max_score = 0.0f;
+            for (int c = kAttrStart; c < kAttrStart + kClassNum; ++c) {
+                const float s = output.at<float>(i, c);
                 if (s > max_score) max_score = s;
             }
             if (max_score < conf_thresh_) continue;
 
-            // 角点: 列 42~49, 每两个一组
+            const float cx = output.at<float>(i, 0);
+            const float cy = output.at<float>(i, 1);
+            const float ww = output.at<float>(i, 2);
+            const float hh = output.at<float>(i, 3);
+
             std::vector<cv::Point2f> corners;
-            for (int k = 0; k < 4; k++) {
-                float px = output.at<float>(i, 42 + k*2);
-                float py = output.at<float>(i, 42 + k*2 + 1);
-                corners.push_back(cv::Point2f(px/scale, py/scale));
+            corners.reserve(4);
+            for (int k = 0; k < 4; ++k) {
+                corners.emplace_back(output.at<float>(i, kCornerStart + k * 2) / scale,
+                                     output.at<float>(i, kCornerStart + k * 2 + 1) / scale);
             }
 
-            cv::Rect r;
-            r.x = (cx - ww/2) / scale;
-            r.y = (cy - hh/2) / scale;
-            r.width  = ww / scale;
-            r.height = hh / scale;
+            cv::Rect r(cvRound((cx - ww * 0.5f) / scale), cvRound((cy - hh * 0.5f) / scale),
+                       cvRound(ww / scale), cvRound(hh / scale));
             r &= cv::Rect(0, 0, bgr.cols, bgr.rows);
             if (r.width < 5 || r.height < 5) continue;
 
             boxes.push_back(r);
             scores.push_back(max_score);
-            all_corners.push_back(corners);
+            all_corners.push_back(std::move(corners));
         }
 
         std::vector<int> indices;
         cv::dnn::NMSBoxes(boxes, scores, conf_thresh_, nms_thresh_, indices);
-        for (int idx : indices) {
+        results.reserve(indices.size());
+        for (const int idx : indices) {
             results.push_back({boxes[idx], scores[idx], all_corners[idx]});
         }
         return results;
     }
 
+    const std::string& device() const { return device_; }
+
 private:
-    ov::Core core_;
+    ov::Core          core_;
     ov::CompiledModel compiled_;
-    ov::InferRequest infer_request_;
-    float conf_thresh_, nms_thresh_;
+    ov::InferRequest  infer_request_;
+    float             conf_thresh_ = 0.4f;
+    float             nms_thresh_  = 0.3f;
+    std::string       device_      = "CPU";
 };
+
+}  // namespace srm

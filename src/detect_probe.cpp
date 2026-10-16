@@ -1,0 +1,161 @@
+// detect_probe.cpp: 检测链路诊断工具
+//
+// 对一张图跑 灯条提取 -> 装甲板配对 -> PnP, 把中间结果全部打印出来,
+// 并输出带标注的调试图。用于回答"为什么这一帧没检出目标"。
+//
+// 用法: ./detect_probe <图片|视频> [输出图] [--frames N]
+#include <cstdio>
+#include <iostream>
+#include <string>
+
+#include <opencv2/opencv.hpp>
+
+#include "armor.hpp"
+#include "config.hpp"
+#include "solver.hpp"
+
+using namespace srm;
+
+static void apply_img_dir(cv::Mat& f) {
+    switch (IMG_DIR) {
+        case 1: cv::flip(f, f, 1); break;
+        case 2: cv::flip(f, f, 0); break;
+        case 3: cv::rotate(f, f, cv::ROTATE_180); break;
+        default: break;
+    }
+}
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "用法: detect_probe <图片|视频> [输出图] [--frames N]\n";
+        return 2;
+    }
+    const std::string input = argv[1];
+    std::string output = (argc > 2 && argv[2][0] != '-') ? argv[2] : "/tmp/probe_out.jpg";
+    int frames = 1;
+    bool verbose = false;
+    for (int i = 2; i < argc; ++i) {
+        if (std::string(argv[i]) == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
+        if (std::string(argv[i]) == "-v") verbose = true;
+    }
+
+    cv::Mat frame;
+    const bool is_video = input.size() > 4 && (input.substr(input.size() - 4) == ".mp4" ||
+                                               input.substr(input.size() - 4) == ".avi");
+    if (is_video) {
+        cv::VideoCapture cap(input);
+        if (!cap.isOpened()) {
+            std::cerr << "打不开视频\n";
+            return 1;
+        }
+        for (int i = 0; i < frames; ++i) cap >> frame;
+    } else {
+        frame = cv::imread(input, cv::IMREAD_COLOR);
+    }
+    if (frame.empty()) {
+        std::cerr << "读不到输入\n";
+        return 1;
+    }
+    apply_img_dir(frame);
+    std::printf("图像 %dx%d, IMG_DIR=%d\n", frame.cols, frame.rows, IMG_DIR);
+
+    // ---------------------------------------------------------- 逐级过滤统计
+    if (verbose) {
+        const float scale = 1.0f;   // 灯条提取已改为全分辨率
+        const cv::Mat& proc = frame;
+        cv::Mat hsv;
+        cv::cvtColor(proc, hsv, cv::COLOR_BGR2HSV);
+        cv::Mat masks[2];
+        cv::inRange(hsv, cv::Scalar(100, 60, 60), cv::Scalar(130, 255, 255), masks[0]);
+        {
+            cv::Mat r1, r2;
+            cv::inRange(hsv, cv::Scalar(0, 60, 60), cv::Scalar(10, 255, 255), r1);
+            cv::inRange(hsv, cv::Scalar(170, 60, 60), cv::Scalar(180, 255, 255), r2);
+            cv::bitwise_or(r1, r2, masks[1]);
+        }
+        std::vector<cv::Mat> bgr;
+        cv::split(proc, bgr);
+        const cv::Mat kc = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5));
+        const cv::Mat ko = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+        std::printf("\n=== 逐级过滤 (proc %dx%d, scale=%.2f) ===\n", proc.cols, proc.rows, scale);
+        for (int c = 0; c < 2; ++c) {
+            cv::Mat bin;
+            cv::morphologyEx(masks[c], bin, cv::MORPH_CLOSE, kc);
+            cv::morphologyEx(bin, bin, cv::MORPH_OPEN, ko);
+            std::vector<std::vector<cv::Point>> cs;
+            cv::findContours(bin, cs, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+            std::printf("  color=%s 形态学后轮廓 %zu 个\n", c == 0 ? "BLUE" : "RED", cs.size());
+            for (size_t i = 0; i < cs.size() && i < 8; ++i) {
+                const double area = cv::contourArea(cs[i]);
+                const cv::RotatedRect rr = cv::minAreaRect(cs[i]);
+                const float L = std::max(rr.size.width, rr.size.height);
+                const float s = std::min(rr.size.width, rr.size.height);
+                cv::Mat mask = cv::Mat::zeros(bin.size(), CV_8U);
+                std::vector<std::vector<cv::Point>> one{cs[i]};
+                cv::drawContours(mask, one, -1, cv::Scalar(255), cv::FILLED);
+                const double mB = cv::mean(bgr[0], mask)[0];
+                const double mG = cv::mean(bgr[1], mask)[0];
+                const double mR = cv::mean(bgr[2], mask)[0];
+                std::printf(
+                    "    #%zu area=%.1f L=%.1f s=%.1f ratio=%.2f BGRmean=(%.0f,%.0f,%.0f) "
+                    "short_ok=%d long_ok=%d ratio_ok=%d purity_ok=%d\n",
+                    i, area, L, s, L / std::max(s, 1e-3f), mB, mG, mR,
+                    (s >= LB_SHORT_MIN / scale), (L >= LB_LONG_MIN / scale),
+                    (L / std::max(s, 1e-3f) >= LB_RATIO_MIN && L / std::max(s, 1e-3f) <= LB_RATIO_MAX),
+                    (c == 0 ? (mB > mG + LB_PURITY && mB > mR + LB_PURITY)
+                            : (mR > mG + LB_PURITY && mR > mB + LB_PURITY)));
+            }
+        }
+    }
+
+    // ---------------------------------------------------------- 灯条
+    const auto bars = extract_lightbars(frame);
+    std::printf("\n=== 灯条 %zu 个 ===\n", bars.size());
+    std::printf("  idx  color  center(px)        len    wid   ratio   dir\n");
+    for (size_t i = 0; i < bars.size(); ++i) {
+        const auto& b = bars[i];
+        std::printf("  %3zu  %5s  (%7.1f,%7.1f)  %6.1f %5.1f  %6.2f  %5.1f\n", i,
+                    b.color == 0 ? "BLUE" : "RED", b.center.x, b.center.y, b.length, b.width,
+                    b.length / std::max(b.width, 1e-3f), b.dir);
+    }
+
+    // ---------------------------------------------------------- 配对
+    const cv::Mat v = hsv_value_channel(frame);
+    const auto armors = match_armors(bars, v);
+    std::printf("\n=== 装甲板配对 %zu 个 ===\n", armors.size());
+    for (size_t i = 0; i < armors.size(); ++i) {
+        const auto& a = armors[i];
+        std::printf("  %3zu  color=%s center=(%7.1f,%7.1f)  w=%6.1f h=%6.1f\n", i,
+                    a.color == 0 ? "BLUE" : "RED", a.center.x, a.center.y, a.width, a.height);
+        for (int k = 0; k < 4; ++k)
+            std::printf("        原始 pt%d=(%7.1f,%7.1f)\n", k, a.pts[k].x, a.pts[k].y);
+        {
+            const auto srt = sort_armor_points(a.pts);
+            for (int k = 0; k < 4; ++k)
+                std::printf("        排序 pt%d=(%7.1f,%7.1f)\n", k, srt[k].x, srt[k].y);
+            std::printf("        is_valid_quad=%d\n", is_valid_quad(srt) ? 1 : 0);
+            const PoseResult pr = solve_pose(srt);
+            if (pr.ok)
+                std::printf("        未过滤位姿 tvec=(%.1f, %.1f, %.1f)\n",
+                            pr.tvec.at<double>(0), pr.tvec.at<double>(1), pr.tvec.at<double>(2));
+        }
+        const SolveResult r = solve_pnp(a.pts);
+        if (r.ok)
+            std::printf("        -> PnP dist=%.3f m  yaw=%.2f  pitch=%.2f\n", r.dist, r.yaw,
+                        r.pitch);
+        else
+            std::printf("        -> PnP 失败\n");
+    }
+
+    // ---------------------------------------------------------- 标注输出
+    draw_debug(frame, bars, armors);
+    for (size_t i = 0; i < bars.size(); ++i) {
+        char t[32];
+        std::snprintf(t, sizeof(t), "b%zu", i);
+        cv::putText(frame, t, bars[i].center + cv::Point2f(4, -4), cv::FONT_HERSHEY_SIMPLEX,
+                    0.5, cv::Scalar(255, 255, 255), 1);
+    }
+    cv::imwrite(output, frame);
+    std::printf("\n标注图已存: %s\n", output.c_str());
+    return 0;
+}
