@@ -1,0 +1,69 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "调试 my_aim (闭环)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/my_aim",
+      "args": ["--headless", "--frames", "300"],
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        { "description": "为 gdb 启用整齐打印", "text": "-enable-pretty-printing", "ignoreFailures": true }
+      ],
+      "preLaunchTask": "2. 编译"
+    },
+    {
+      "name": "调试 cam_view (实时成像)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/cam_view",
+      "args": ["--hold-current"],
+      "cwd": "${workspaceFolder}",
+      "environment": [{ "name": "DISPLAY", "value": ":1" }],
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        { "description": "为 gdb 启用整齐打印", "text": "-enable-pretty-printing", "ignoreFailures": true }
+      ],
+      "preLaunchTask": "2. 编译"
+    },
+    {
+      "name": "调试 detect_probe (单帧诊断)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/tests/detect_probe",
+      "args": ["--cam", "--hold-current", "diag/probe.jpg", "-v"],
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        { "description": "为 gdb 启用整齐打印", "text": "-enable-pretty-printing", "ignoreFailures": true }
+      ],
+      "preLaunchTask": "2. 编译"
+    },
+    {
+      "name": "调试 单元测试 (选当前文件)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/tests/${fileBasenameNoExtension}",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        { "description": "为 gdb 启用整齐打印", "text": "-enable-pretty-printing", "ignoreFailures": true }
+      ],
+      "preLaunchTask": "2. 编译"
+    }
+  ]
+}

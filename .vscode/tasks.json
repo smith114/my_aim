@@ -1,0 +1,108 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "1. 配置 CMake",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["-S", ".", "-B", "build", "-DCMAKE_BUILD_TYPE=Release"],
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "2. 编译",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "build", "-j4"],
+      "problemMatcher": ["$gcc"],
+      "group": { "kind": "build", "isDefault": true },
+      "dependsOn": "1. 配置 CMake"
+    },
+    {
+      "label": "3. 跑测试 (上车前必做)",
+      "type": "shell",
+      "command": "ctest",
+      "args": ["--test-dir", "build", "--output-on-failure"],
+      "problemMatcher": [],
+      "group": "test",
+      "dependsOn": "2. 编译"
+    },
+    {
+      "label": "4. 编 + 测 (一条龙)",
+      "dependsOrder": "sequence",
+      "dependsOn": ["2. 编译", "3. 跑测试 (上车前必做)"],
+      "problemMatcher": []
+    },
+    {
+      "label": "运行: 实时成像 cam_view",
+      "type": "shell",
+      "command": "./build/cam_view",
+      "args": ["--hold-current"],
+      "options": { "env": { "DISPLAY": ":1" } },
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "运行: cam_view (存图模式, 不开窗口)",
+      "type": "shell",
+      "command": "./build/cam_view",
+      "args": ["--headless", "--hold-current", "--out", "diag", "--every", "20", "--frames", "200"],
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "运行: 自瞄闭环 my_aim",
+      "type": "shell",
+      "command": "./build/my_aim",
+      "args": ["--headless", "--frames", "300"],
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "运行: my_aim 开窗口调试",
+      "type": "shell",
+      "command": "./build/my_aim",
+      "args": ["--debug"],
+      "options": { "env": { "DISPLAY": ":1" } },
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "诊断: 看当前检测结果",
+      "type": "shell",
+      "command": "./build/tests/detect_probe",
+      "args": ["--cam", "--hold-current", "diag/probe.jpg", "-v"],
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "诊断: 读云台实测姿态",
+      "type": "shell",
+      "command": "./build/gimbal_test",
+      "args": ["--query"],
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "诊断: 盯云台角/模式变化 (右键进视觉模式时看这个)",
+      "type": "shell",
+      "command": "./build/gimbal_test",
+      "args": ["--watch"],
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "刹车: 关掉 cam_view 释放相机",
+      "type": "shell",
+      "command": "pkill -f build/cam_view; pkill -f build/my_aim; echo 已释放",
+      "problemMatcher": []
+    }
+  ]
+}

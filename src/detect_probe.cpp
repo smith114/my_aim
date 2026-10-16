@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
     if (verbose) {
         const cv::Mat vch = hsv_value_channel(frame);
         printf("\n=== 配对约束逐条检查 (前 12 根) ===\n");
-        printf("  i  j  color dLen  dy/h  dx/h  dAng | 结果\n");
+        printf("  i  j  color dLen  dy/h  dx/h  dAng  aspect | 结果\n");
         const int n = static_cast<int>(bars.size());
         for (int i = 0; i < n && i < 12; ++i) {
             for (int j = i + 1; j < n && j < 12; ++j) {
@@ -229,6 +229,10 @@ int main(int argc, char** argv) {
                 const float dx = std::fabs(a.center.x - b.center.x) / hmax;
                 float ad = std::fabs(a.dir - b.dir);
                 if (ad > 90.0f) ad = 180.0f - ad;
+                // 构造板的宽高比(与 match_armors 一致)
+                const float dxp = std::fabs(a.center.x - b.center.x);
+                const float aspect =
+                    (dxp + std::max(a.width, b.width)) / std::max(hmax, 1e-3f);
                 const char* why = "OK";
                 if (a.color != b.color)                              why = "异色";
                 else if (dlen < PAIR_LEN_RATIO_MIN)                  why = "长度比";
@@ -236,12 +240,14 @@ int main(int argc, char** argv) {
                 else if (dx < PAIR_DIST_RATIO_MIN)                   why = "太近";
                 else if (dx > PAIR_DIST_RATIO_MAX)                   why = "太远";
                 else if (ad > PAIR_ANGLE_DIFF)                       why = "不平行";
+                else if (aspect < PAIR_ASPECT_MIN ||
+                         aspect > PAIR_ASPECT_MAX)                   why = "宽高比不当(疑似跨板)";
                 else if (!vch.empty() &&
                          !armor_center_dark(vch, (a.center + b.center) * 0.5f,
                                             std::fabs(a.center.x - b.center.x) * 0.35f,
                                             hmax * 0.5f))               why = "中心不够暗";
-                printf("  %2d %2d  %s  %5.2f %5.2f %5.2f %5.1f | %s\n", i, j,
-                       a.color == 0 ? "B" : "R", dlen, dy, dx, ad, why);
+                printf("  %2d %2d  %s  %5.2f %5.2f %5.2f %5.1f %6.2f | %s\n", i, j,
+                       a.color == 0 ? "B" : "R", dlen, dy, dx, ad, aspect, why);
             }
         }
     }

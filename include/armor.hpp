@@ -228,14 +228,20 @@ inline std::vector<Armor> match_armors(const std::vector<LightBar>& bars,
             if (!hsv_v.empty() &&
                 !armor_center_dark(hsv_v, c, dx * 0.35f, hmax * 0.5f)) continue;
 
-            // 构造装甲板四点: 中心 + 两灯条平均方向;
-            // 宽 = 灯条间距 + 灯条半宽, 高 = 灯条长
+            // 宽高比约束 —— 防跨板误配对。
+            // 构造出的板: 宽 = 灯条间距 + 灯条宽, 高 = 灯条长。
+            // 真板 140x125mm 正对时约 1.12, 斜视只会更小; 配到两块不同板上的
+            // 灯条时这个比值会冲到 3~7, 必须在这里拦掉。
+            const float half_h = hmax * 0.5f;
+            const float half_w = dx * 0.5f + std::max(a.width, b.width) * 0.5f;
+            const float aspect = (2.0f * half_w) / std::max(2.0f * half_h, 1e-3f);
+            if (aspect < PAIR_ASPECT_MIN || aspect > PAIR_ASPECT_MAX) continue;
+
+            // 构造装甲板四点: 中心 + 两灯条平均方向
             Armor ar;
             ar.color  = a.color;
             ar.center = c;
             const float dir_rad = (a.dir + b.dir) * 0.5f * static_cast<float>(CV_PI) / 180.0f;
-            const float half_h = hmax * 0.5f;
-            const float half_w = dx * 0.5f + std::max(a.width, b.width) * 0.5f;
             const cv::Point2f u(std::cos(dir_rad), std::sin(dir_rad));  // 沿灯条(竖直)
             const cv::Point2f v(-u.y, u.x);                             // 垂直(水平)
             std::vector<cv::Point2f> pts{

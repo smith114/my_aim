@@ -35,11 +35,13 @@ static void usage() {
     std::printf(
         "用法:\n"
         "  gimbal_test --query                 只读当前实测姿态\n"
+        "  gimbal_test --watch                 实时盯 mode/姿态 (诊断鼠标右键是否生效)\n"
         "  gimbal_test --hold                  保持当前角(验证链路)\n"
         "  gimbal_test --step <yaw|pitch> <deg> [--frames N]\n"
         "  gimbal_test --sweep <+|-><yaw|pitch> [--stop N] [--max-deg D] [--port P]\n"
         "例子:\n"
         "  ./gimbal_test --query\n"
+        "  ./gimbal_test --watch\n"
         "  ./gimbal_test --sweep +yaw --stop 8\n"
         "  ./gimbal_test --sweep -pitch --stop 8 --max-deg 90\n");
 }
@@ -60,6 +62,8 @@ int main(int argc, char** argv) {
             mode = "query";
         } else if (a == "--hold") {
             mode = "hold";
+        } else if (a == "--watch") {
+            mode = "watch";
         } else if (a == "--step" && i + 2 < argc) {
             mode = "step";
             axis = argv[++i];
@@ -143,6 +147,47 @@ int main(int argc, char** argv) {
                     (unsigned long long)link.rx_frames(),
                     (unsigned long long)link.rx_bad_frames(),
                     (unsigned long long)link.resync_drops());
+        link.stop();
+        return 0;
+    }
+
+    // ---------------------------------------------------------- --watch
+    // 实时盯 mode 与姿态变化。用来判断"鼠标右键到底有没有生效":
+    // 按一次右键, 如果下位机真的收到并切换了视觉模式, 这里的 mode 会跳变并打横幅。
+    // 如果 mode 一直不动, 说明右键没到下位机(鼠标/接线/固件侧问题), 与上位机无关。
+    if (mode == "watch") {
+        std::printf("实时监视中 (Ctrl-C 退出)。请现在去按鼠标右键进入视觉控制模式。\n");
+        std::printf("判据: mode 由 0 跳到 1 = 下位机已进入视觉模式。\n\n");
+        std::printf("   时间     yaw      pitch    roll     mode  id  帧数   说明\n");
+        int last_mode = -999;
+        const auto t0 = std::chrono::steady_clock::now();
+        while (!g_stop) {
+            st = link.state();
+            // 一直发"保持当前角", 这样云台不会因为我们不动而漂走
+            if (st.valid) link.set_target(st.yaw, st.pitch, 0);
+
+            if (st.mode != last_mode) {
+                if (last_mode != -999) {
+                    std::printf("\n  ================= mode %d -> %d =================\n",
+                                last_mode, st.mode);
+                    if (st.mode == 1) {
+                        std::printf("  >>> 已进入视觉控制模式, 下位机现在会接受上位机的角度指令 <<<\n\n");
+                    } else {
+                        std::printf("  >>> 已退出视觉控制模式, 下位机将忽略角度指令 <<<\n\n");
+                    }
+                }
+                last_mode = st.mode;
+            }
+
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - t0).count();
+            std::printf("\r%6.1fs  %8.2f %8.2f %7.2f  %4d  %3d  %5llu",
+                        ms / 1000.0, st.yaw, st.pitch, st.roll, st.mode, st.robot_id,
+                        (unsigned long long)link.rx_frames());
+            std::fflush(stdout);
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        }
+        std::printf("\n");
         link.stop();
         return 0;
     }

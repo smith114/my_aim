@@ -68,6 +68,19 @@ constexpr float PAIR_DIST_RATIO_MIN = 0.8f;   // x 间距 / 灯条长
 constexpr float PAIR_DIST_RATIO_MAX = 4.0f;   // 正面标准板约 2.5~3.5, 放宽兼容斜视
 constexpr float PAIR_ANGLE_DIFF     = 15.0f;  // 两灯条平行度(度)
 
+// 装甲板**宽高比**约束 —— 这条是防"跨板误配对"的关键。
+//
+// 物理依据: 靶标 140 x 125 mm, 正对时 宽/高 = 1.12。
+// 斜视只会让宽度按 cos 缩短, 所以**真实板的宽高比永远不会明显大于 1.2**。
+// 一旦配到两块不同板上的灯条, 宽高比会轻松冲到 3~7。
+//
+// 实测(10-16): 缺这条约束时, 把相隔 126px 的两根灯条配成一个 134.8x32.6 的"板",
+// 宽高比 4.13 —— 明显是跨板误配, 但当时没有任何约束能拦住它。
+// 上限取 1.6: 留出灯条内缩(灯条比板略短)和透视余量。
+// 下限取 0.25: 允许很斜的视角, 只滤掉"细成一条线"的退化情况。
+constexpr float PAIR_ASPECT_MIN = 0.25f;
+constexpr float PAIR_ASPECT_MAX = 1.6f;
+
 // 装甲板中心暗区验证: 真板两灯之间是黑底, 环境假配对中心往往也亮
 constexpr float ARMOR_CENTER_V_MAX = 160.0f;  // 中心区域 HSV V 均值上限
 
