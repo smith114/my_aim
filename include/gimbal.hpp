@@ -80,7 +80,7 @@ public:
         cmd_yaw   = step_toward(cmd_yaw,   want_yaw,   SERVO_MAX_STEP);
         cmd_pitch = step_toward(cmd_pitch, want_pitch, SERVO_MAX_STEP);
         cmd_yaw   = wrap_or_clamp_yaw(cmd_yaw);
-        cmd_pitch = clamp_val(cmd_pitch, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
+        cmd_pitch = wrap_or_clamp_pitch(cmd_pitch);
         apply_envelope();   // 再套一层安全包络
         return true;
     }
@@ -93,7 +93,7 @@ public:
         return true;
     }
     bool manual_pitch(float d) {
-        cmd_pitch = clamp_val(cmd_pitch + d, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
+        cmd_pitch = wrap_or_clamp_pitch(cmd_pitch + d);
         sm_pitch_ = 0.0f;
         apply_envelope();
         return true;
@@ -122,16 +122,21 @@ public:
 
     // 安全包络: 命令角不允许离启动姿态超过 ENVELOPE 度。
     //
-    // 为什么需要它: 云台的真实角量程事先不知道(协议没规定, 固件还会再限位)。
-    // 但控制律锚在实测角上, 本身不会主动往限位撞, 所以只要再加一圈"别跑太远"
-    // 的软保护就够了 —— 比去猜一个绝对区间可靠得多。
-    // 真出问题时(比如符号错), 云台最多在启动姿态附近小幅晃动, 不会一路转到底。
+    // 为什么必须相对启动姿态而不是给绝对区间:
+    //   yaw 能整圈转, 但 pitch 有机械限位, 而零位并不是机壳行程的中点
+    //   (实测零位下 pitch=-38.3, 可行程只有约 [-35.8, +26.1])。
+    //   一旦 pitch 顶到限位, 反馈会卡住不再跟随命令; 如果还按绝对区间去比较,
+    //   会得到一个错误的高度差, 云台就卡死在错的高度回不来。
+    //   相对包络与零位无关, 没有这个问题。
+    // 两轴都用 wrap_delta 比较, 跨 ±180 也能正确工作。
     void apply_envelope() {
         const float dy = wrap_delta(cmd_yaw - home_yaw);
         if (dy >  GIMBAL_ENVELOPE_DEG) cmd_yaw = wrap360(home_yaw + GIMBAL_ENVELOPE_DEG);
         if (dy < -GIMBAL_ENVELOPE_DEG) cmd_yaw = wrap360(home_yaw - GIMBAL_ENVELOPE_DEG);
-        cmd_pitch = clamp_val(cmd_pitch, home_pitch - GIMBAL_ENVELOPE_DEG,
-                                          home_pitch + GIMBAL_ENVELOPE_DEG);
+
+        const float dp = wrap_delta(cmd_pitch - home_pitch);
+        if (dp >  GIMBAL_ENVELOPE_DEG) cmd_pitch = wrap360(home_pitch + GIMBAL_ENVELOPE_DEG);
+        if (dp < -GIMBAL_ENVELOPE_DEG) cmd_pitch = wrap360(home_pitch - GIMBAL_ENVELOPE_DEG);
     }
 
     // 查询/调试用: 直接给一个绝对命令角(绕过包络, 供 gimbal_test 工具使用)
@@ -173,6 +178,10 @@ private:
     float wrap_or_clamp_yaw(float v) const {
         if (GIMBAL_YAW_MAX - GIMBAL_YAW_MIN >= 359.0f) return wrap360(v);
         return clamp_val(v, GIMBAL_YAW_MIN, GIMBAL_YAW_MAX);
+    }
+    float wrap_or_clamp_pitch(float v) const {
+        if (GIMBAL_PITCH_MAX - GIMBAL_PITCH_MIN >= 359.0f) return wrap360(v);
+        return clamp_val(v, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
     }
     // 低通: 把输入滤波到 state 里, 并在死区内归零
     static float smooth(float in, float& state) {

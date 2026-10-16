@@ -27,6 +27,13 @@ static float half_fov_deg() {
     return static_cast<float>(std::atan2(CAM_CX, CAM_FX) * 180.0 / CV_PI);
 }
 
+// 角度差规整到 (-180,180] —— 命令角是 0~360 归一化的, 直接相减会得到 330 这种值
+static float wrap_delta(float d) {
+    while (d >  180.0f) d -= 360.0f;
+    while (d <= -180.0f) d += 360.0f;
+    return d;
+}
+
 struct LoopOutcome {
     int   locked_at = -1;
     float turned    = 0.0f;   // 云台实际转过角度
@@ -187,6 +194,60 @@ int main() {
         CHECK(!gimbal.track(-15.0f, 5.0f));        // 无实测角 -> 拒绝跟踪
         CHECK_NEAR(gimbal.cmd_yaw, 90.0f, 1e-6);
         std::printf("  [场景7] 无回传时 track() 返回 false 且命令角保持不变\n");
+    }
+
+    // ---------------------------------------------------------- 场景 8: pitch 顶到机械限位后能自己回来
+    //
+    // 这是实机上真实存在的坑: yaw 能整圈转, 但 pitch 上下有限
+    // (实测行程约 [-35.8, +26.1], 而零位并不在行程中点)。
+    // 目标在限位之外时, 反馈会卡在限位值不再跟随命令。如果按"绝对区间"去
+    // 比较就会算错高度差、卡死在错的高度; 用"相对启动姿态"的包络则能自己回来。
+    {
+        GimbalCtrl gimbal;
+        const float PITCH_LO = -35.8f;   // 实测下限
+        const float PITCH_HI =  26.1f;   // 实测上限
+        gimbal.update_feedback(0.0f, 0.0f);
+        const float home_p = gimbal.home_pitch;
+
+        // 目标在很下方: 偏差角持续给 -60 度, 想让云台一直往下走
+        for (int i = 0; i < 400; ++i) {
+            // 模拟实测角: 命令被限制在机械行程内
+            float meas = gimbal.cmd_pitch;
+            if (meas < PITCH_LO) meas = PITCH_LO;
+            if (meas > PITCH_HI) meas = PITCH_HI;
+            gimbal.update_feedback(0.0f, meas);
+            // 目标在画面下方 -> 偏差角为负, 云台应往下压
+            gimbal.track(0.0f, -60.0f);
+        }
+        // 命令角绝不能超出启动姿态 ± 包络(包络比机械行程小, 所以更早被拦住)
+        const float dp = wrap_delta(gimbal.cmd_pitch - home_p);
+        CHECK(std::fabs(dp) <= GIMBAL_ENVELOPE_DEG + 1e-3f);
+        std::printf("  [场景8] 目标在限位外: 命令 pitch 停在 %+.1f 度(包络 %.0f 度), 未失控\n",
+                    dp, GIMBAL_ENVELOPE_DEG);
+
+        // 目标回到画面中心 -> 云台应该能回到包络内, 不会卡死在限位
+        for (int i = 0; i < 400; ++i) {
+            float meas = gimbal.cmd_pitch;
+            if (meas < PITCH_LO) meas = PITCH_LO;
+            if (meas > PITCH_HI) meas = PITCH_HI;
+            gimbal.update_feedback(0.0f, meas);
+            gimbal.track(0.0f, 0.0f);              // 偏差为 0
+        }
+        CHECK(std::fabs(wrap_delta(gimbal.cmd_pitch - home_p)) <= GIMBAL_ENVELOPE_DEG + 1e-3f);
+        std::printf("  [场景8] 偏差归零后命令 pitch = %+.2f 度 (相对启动姿态)\n",
+                    wrap_delta(gimbal.cmd_pitch - home_p));
+    }
+
+    // ---------------------------------------------------------- 场景 9: yaw 整圈可用
+    {
+        GimbalCtrl gimbal;
+        gimbal.update_feedback(0.0f, 0.0f);
+        gimbal.force_set(0.0f, 0.0f);
+        // 连续正向手动转, 应能绕整圈而不被夹住
+        for (int i = 0; i < 10; ++i) gimbal.force_set(gimbal.cmd_yaw + 100.0f, 0.0f);
+        gimbal.manual_yaw(5.0f);
+        CHECK(gimbal.cmd_yaw >= 0.0f && gimbal.cmd_yaw < 360.0f);
+        std::printf("  [场景9] yaw 可连续旋转, 当前 %.1f 度 (0~360 归一化)\n", gimbal.cmd_yaw);
     }
 
     TEST_MAIN_END();
