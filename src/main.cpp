@@ -208,8 +208,15 @@ int main(int argc, char** argv) {
         LOG("[WARN] 还没收到下位机回传, 云台将保持不动(避免拿错误基准乱指)\n");
     }
 
-    // 开机先发一个安全的初始角, 避免云台猛转(收到回传后会被实测角替换)
-    link.set_target(gimbal.cmd_yaw, gimbal.cmd_pitch, 0);
+    // 只有在已经知道云台当前姿态时才发第一帧。
+    // 绝不能用一个默认值(尤其 0,0)开局 —— ID1 是绝对角度, 那等于命令云台猛转到那个角。
+    // SerialLink 在 set_target 之前一帧都不发, 这里配合它做门控。
+    if (gimbal.have_meas || force_mock || serial_fd < 0) {
+        link.set_target(gimbal.cmd_yaw, gimbal.cmd_pitch, 0);
+        LOG("[GIMBAL] 起始命令角 = 实测角 %.2f/%.2f\n", gimbal.cmd_yaw, gimbal.cmd_pitch);
+    } else {
+        LOG("[GIMBAL] 等第一帧回传后再决定命令角(在此之前一帧都不发)\n");
+    }
 
     // ---------------------------------------------------------- 快照目录
     if ((headless || still_image) && !dir_exists(snapshot_dir)) {

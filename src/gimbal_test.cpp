@@ -35,6 +35,7 @@ static void usage() {
     std::printf(
         "用法:\n"
         "  gimbal_test --query                 只读当前实测姿态\n"
+        "  gimbal_test --stay                  锁住当前姿态不归零(手动对准后停在这)\n"
         "  gimbal_test --watch                 实时盯 mode/姿态 (诊断鼠标右键是否生效)\n"
         "  gimbal_test --hold                  保持当前角(验证链路)\n"
         "  gimbal_test --step <yaw|pitch> <deg> [--frames N]\n"
@@ -64,6 +65,8 @@ int main(int argc, char** argv) {
             mode = "hold";
         } else if (a == "--watch") {
             mode = "watch";
+        } else if (a == "--stay") {
+            mode = "stay";
         } else if (a == "--step" && i + 2 < argc) {
             mode = "step";
             axis = argv[++i];
@@ -188,6 +191,45 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(150));
         }
         std::printf("\n");
+        link.stop();
+        return 0;
+    }
+
+    // ---------------------------------------------------------- --stay
+    // 锁住当前姿态: 一直把"当前实测角"当命令发回去, 直到 Ctrl-C。
+    //
+    // 这就是"手动对好之后停住别动"的用法:
+    //   * 每帧重新读实测角再原样发回 -> 你用手推它, 它会跟着走, 不跟你顶牛;
+    //   * 松手后它会停在你放的位置(实测角不再变, 命令也就不再变);
+    //   * 退出时补发的也是这个角(见 SerialLink::stop), **不会回到 0/0**;
+    //   * 程序启动时不发任何帧, 直到读到第一帧回传(见 SerialLink::start)。
+    if (mode == "stay") {
+        std::printf("已锁住当前姿态, Ctrl-C 退出。程序不会把它拉回 0/0。\n");
+        std::printf("(你现在可以用手把云台推到想要的角度, 松手后它会停在那儿)\n\n");
+        float last_reported_y = 1e9f, last_reported_p = 1e9f;
+        int  held = 0;
+        while (!g_stop) {
+            st = link.state();
+            if (st.valid) {
+                link.set_target(st.yaw, st.pitch, 0);   // 原样发回 = 锁住
+                ++held;
+                // 只在有人动了它或每隔 2 秒打一次, 避免刷屏
+                const bool moved = std::fabs(st.yaw - last_reported_y) > 0.3f ||
+                                   std::fabs(st.pitch - last_reported_p) > 0.3f;
+                static int tick = 0;
+                if (moved || (++tick % 20 == 0)) {
+                    std::printf("已锁定 yaw=%.2f pitch=%.2f (mode=%d) 已保持 %d 帧\n",
+                                st.yaw, st.pitch, st.mode, held);
+                    std::fflush(stdout);
+                    last_reported_y = st.yaw;
+                    last_reported_p = st.pitch;
+                }
+            } else {
+                std::printf("等回传...\n");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        std::printf("\n退出, 最后锁定在 yaw=%.2f pitch=%.2f\n", st.yaw, st.pitch);
         link.stop();
         return 0;
     }

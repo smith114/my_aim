@@ -234,18 +234,21 @@ public:
     SerialLink& operator=(const SerialLink&) = delete;
 
     // fd < 0 => mock 模式: 不碰真串口, 只跑收发计数, 便于离线验证闭环逻辑
+    //
+    // 重要: start() **不会**自动发任何东西。必须显式调用 set_target() 之后才会开始
+    // 发送。原因是 ID1 是绝对角度, 上位机在收到下位机回传之前根本不知道云台现在
+    // 指哪儿; 此时若发一个默认值(尤其是 0,0), 就等于命令云台猛转过去。
+    // 实测踩坑: 之前这里初始化成 TxTarget{}(即 yaw=0,pitch=0), 结果每次启动程序
+    // 云台都被拽到 0/0, 手动对好的方向全丢。
     bool start(int fd, int send_hz = 100, int watchdog_ms = 500,
-               int shutdown_zero_frames = 20) {
+               int shutdown_frames = 20) {
         fd_ = fd;
         send_period_ms_ = 1000 / (send_hz > 0 ? send_hz : 1);
         watchdog_ms_ = watchdog_ms;
-        shutdown_zero_frames_ = shutdown_zero_frames;
+        shutdown_zero_frames_ = shutdown_frames;
         stop_flag_ = false;
-        {
-            std::lock_guard<std::mutex> lk(tx_m_);
-            target_ = TxTarget{};
-            target_.stamp = now_s();
-        }
+        has_target_ = false;
+        tx_frames_ = 0;
         tx_thread_ = std::thread(&SerialLink::tx_loop, this);
         if (fd_ >= 0) rx_thread_ = std::thread(&SerialLink::rx_loop, this);
         return true;
@@ -256,10 +259,24 @@ public:
         if (rx_thread_.joinable()) rx_thread_.join();
         if (tx_thread_.joinable()) tx_thread_.join();
         if (fd_ >= 0) {
-            // 补发零帧: 协议没有超时保护, 下位机会一直用最后一条有效指令
+            // 退出时补发若干帧。补发的必须是**最后一个有效命令角**, 不能归零!
+            //
+            // 协议文档 6.3 节说"退出/异常/Ctrl-C 都要补发零速度帧", 但那条是写给
+            // 导航底盘的速度指令的 —— 速度 0 = 停住, 安全。
+            // 自瞄这边 ID1 是**绝对角度**, (0,0) 是一个合法角度, 归零等于命令云台
+            // 猛转到 yaw=0 / pitch=0。
+            // 实测踩坑: 退出 gimbal_test 后云台从 yaw=-138 被甩到 -24 度,
+            // 后续所有测试都指向了错误的方位, 白白排查了好几轮。
+            TxTarget hold;
+            {
+                std::lock_guard<std::mutex> lk(tx_m_);
+                hold = target_;
+            }
+            const float y = zero_on_shutdown_ ? 0.0f : hold.yaw;
+            const float p = zero_on_shutdown_ ? 0.0f : hold.pitch;
             for (int i = 0; i < shutdown_zero_frames_; ++i) {
-                auto pkt = pack_tx(0.0f, 0.0f, 0);
-                ssize_t n = ::write(fd_, pkt.data(), pkt.size());
+                auto pkt = pack_tx(y, p, 0);
+                const ssize_t n = ::write(fd_, pkt.data(), pkt.size());
                 (void)n;
                 std::this_thread::sleep_for(std::chrono::milliseconds(send_period_ms_));
             }
@@ -268,6 +285,10 @@ public:
         }
     }
 
+    // 退出时是否归零。默认 false = 保持最后命令角(云台正确行为)。
+    // 只有将来驱动底盘速度指令时才该设 true。
+    void set_zero_on_shutdown(bool v) { zero_on_shutdown_ = v; }
+
     // 主线程: 更新要发给下位机的目标(线程安全)
     void set_target(float yaw_deg, float pitch_deg, int32_t fire_flag) {
         std::lock_guard<std::mutex> lk(tx_m_);
@@ -275,7 +296,11 @@ public:
         target_.pitch     = pitch_deg;
         target_.fire_flag = fire_flag;
         target_.stamp     = now_s();
+        has_target_       = true;   // 从这一刻起才开始真正发送
     }
+
+    // 有没有设过目标(没设过就一帧都没发)
+    bool has_target() const { return has_target_; }
 
     // 主线程: 强制回零(例如急停/异常)
     void zero_target() { set_target(0.0f, 0.0f, 0); }
@@ -297,7 +322,22 @@ private:
 
     void tx_loop() {
         auto next = std::chrono::steady_clock::now();
+        bool warned = false;
         while (!stop_flag_) {
+            // 还没设过目标就什么都不发。
+            // 关键: 在收到下位机回传之前我们不知道云台当前指哪儿, 此时发任何取值
+            // 都可能让云台猛转。宁可晚发, 也不要发错。
+            if (!has_target_) {
+                if (!warned) {
+                    warned = true;
+                    std::fprintf(stderr,
+                                 "[SERIAL] 尚未设定目标角, 暂不发送(等 set_target)。\n"
+                                 "         这是有意的: 不知道云台当前姿态时不发指令更安全。\n");
+                }
+                next += std::chrono::milliseconds(send_period_ms_);
+                std::this_thread::sleep_until(next);
+                continue;
+            }
             TxTarget t;
             {
                 std::lock_guard<std::mutex> lk(tx_m_);
@@ -305,7 +345,7 @@ private:
             }
             if ((now_s() - t.stamp) * 1000.0 > watchdog_ms_) {
                 // 看门狗: 控制量太久没更新, 冻结在最后一个有效角上, 并撤掉开火请求。
-                // 注意不能直接归零: 0 对云台是一个"猛转到限位"的指令, 反而更危险。
+                // 绝不能归零 —— (0,0) 是一个合法的绝对角度, 等于命令云台转到 0/0。
                 if (!watchdog_active_) {
                     watchdog_active_ = true;
                     ++watchdog_trips_;
@@ -316,9 +356,10 @@ private:
             } else {
                 watchdog_active_ = false;
             }
+            // 非有限值同样不能归零, 冻结上一帧
             if (!std::isfinite(t.yaw) || !std::isfinite(t.pitch)) {
-                t.yaw = 0.0f;
-                t.pitch = 0.0f;
+                t.yaw       = last_tx_.yaw;
+                t.pitch     = last_tx_.pitch;
                 t.fire_flag = 0;
             }
             if (fd_ >= 0) {
@@ -352,6 +393,8 @@ private:
     int send_period_ms_ = 10;
     int watchdog_ms_ = 500;
     int shutdown_zero_frames_ = 20;
+    bool zero_on_shutdown_ = false;   // 云台: 默认保持最后命令角, 不归零
+    std::atomic<bool> has_target_{false};   // 未设目标前不发任何帧
     std::atomic<bool> stop_flag_{true};
     std::atomic<bool> watchdog_active_{false};
     std::atomic<uint64_t> tx_frames_{0};

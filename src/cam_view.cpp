@@ -43,6 +43,9 @@ int main(int argc, char** argv) {
     bool hold_current = false;
     bool raw = false;
     bool show_bars = true;
+    bool seek = false;
+    float seek_span = 150.0f;    // yaw 搜索范围 ±span/2 度
+    float seek_step = 5.0f;
     std::string bayer_arg;
     std::string out_dir = "diag";
     int snap_every = 30;
@@ -53,13 +56,18 @@ int main(int argc, char** argv) {
         if (a == "--headless")            headless = true;
         else if (a == "--hold-current")   hold_current = true;
         else if (a == "--raw")            raw = true;
+        else if (a == "--seek")           { seek = true; headless = true; hold_current = true; }
+        else if (a == "--span" && i + 1 < argc)      seek_span = std::atof(argv[++i]);
+        else if (a == "--seek-step" && i + 1 < argc) seek_step = std::atof(argv[++i]);
         else if (a == "--bayer" && i + 1 < argc) bayer_arg = argv[++i];
         else if (a == "--out" && i + 1 < argc)   out_dir = argv[++i];
         else if (a == "--every" && i + 1 < argc) snap_every = std::atoi(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) max_frames = std::atoi(argv[++i]);
         else if (a == "-h" || a == "--help") {
             std::printf("用法: cam_view [--headless] [--hold-current] [--raw] [--bayer XX]\n"
-                        "                [--out DIR] [--every N] [--frames N]\n");
+                        "                [--out DIR] [--every N] [--frames N]\n"
+                        "      cam_view --seek [--span DEG] [--seek-step DEG]\n"
+                        "  --seek  自动横扫找装甲板, 找到就停在该角度并报出来(全 ASCII 输出)\n");
             return 0;
         }
     }
@@ -101,6 +109,111 @@ int main(int argc, char** argv) {
     }
 
     if (headless) ::mkdir(out_dir.c_str(), 0755);
+
+    // ---------------------------------------------------------- --seek
+    // 自动横扫找装甲板: 以当前位置为中心, 在 yaw 上左右扫, 每个角度抓几帧跑检测,
+    // 一找到配对的装甲板就停在那儿并报出角度。
+    // 输出全部是 ASCII, 方便在 PowerShell/SSH 里解析(中文会被控制台编码搞乱)。
+    if (seek) {
+        if (!have_serial) {
+            std::fprintf(stderr, "[SEEK] 需要串口来控制云台\n");
+            cam.close();
+            return 1;
+        }
+        RxState st = link.state();
+        const float y0 = st.yaw, p0 = st.pitch;
+        std::printf("[SEEK] start yaw=%.1f pitch=%.1f mode=%d span=+/-%.0f step=%.1f\n",
+                    y0, p0, st.mode, seek_span * 0.5f, seek_step);
+        if (st.mode != 1) {
+            std::printf("[SEEK][WARN] mode=%d != 1, lower machine will ignore us; "
+                        "press right mouse button to enter vision control\n", st.mode);
+        }
+
+        const int   half_n = static_cast<int>(seek_span * 0.5f / seek_step);
+        int         best_bars = 0, best_armor = 0;
+        float       best_y = y0, best_p = p0;
+        bool        found = false;
+
+        // 也扫 pitch: 只扫 yaw 时如果靶标在别的仰角就永远找不到。
+        // 顺序: 先在该 pitch 上由内向外扫 yaw, 再换下一个 pitch。
+        const float pitch_list[] = {p0, p0 + 10.0f, p0 - 10.0f, p0 + 20.0f, p0 - 20.0f,
+                                    p0 + 30.0f, p0 - 30.0f};
+        for (const float ptest : pitch_list) {
+            if (found) break;
+            std::printf("[SEEK] ---- pitch=%.1f ----\n", ptest);
+            for (int k = 0; k <= half_n && !found; ++k) {
+                for (int sgn = 0; sgn < 2 && !found; ++sgn) {
+                    if (k == 0 && sgn == 1) continue;
+                    const float off =
+                        (k == 0) ? 0.0f : (sgn == 0 ? +1.0f : -1.0f) * k * seek_step;
+                    const float yaw = y0 + off;
+                    for (int t = 0; t < 12; ++t) {
+                        link.set_target(yaw, ptest, 0);
+                        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                    }
+                    int bars_n = 0, armor_n = 0;
+                    float vmean = 0.0f;
+                    for (int f = 0; f < 4; ++f) {
+                        cv::Mat img;
+                        if (!cam.read(img)) continue;
+                        if (!raw) apply_img_dir(img);
+                        const cv::Mat vch = hsv_value_channel(img);
+                        vmean = static_cast<float>(cv::mean(vch)[0]);
+                        const auto bs = extract_lightbars(img);
+                        const auto as = match_armors(bs, vch);
+                        if (static_cast<int>(as.size()) > armor_n) {
+                            armor_n = static_cast<int>(as.size());
+                            bars_n = static_cast<int>(bs.size());
+                        } else if (static_cast<int>(bs.size()) > bars_n) {
+                            bars_n = static_cast<int>(bs.size());
+                        }
+                    }
+                    std::printf("[SEEK] pitch=%7.1f off=%+7.1f yaw=%8.2f bars=%d armor=%d "
+                                "V=%.0f\n",
+                                ptest, off, yaw, bars_n, armor_n, vmean);
+                    std::fflush(stdout);
+
+                    if (armor_n > best_armor ||
+                        (armor_n == best_armor && bars_n > best_bars)) {
+                        best_armor = armor_n;
+                        best_bars = bars_n;
+                        best_y = yaw;
+                        best_p = ptest;
+                    }
+                    if (armor_n >= 1) {
+                        found = true;
+                        std::printf("[SEEK][FOUND] armor=%d bars=%d at yaw=%.2f pitch=%.2f\n",
+                                    armor_n, bars_n, yaw, ptest);
+                    }
+                }
+            }
+        }
+
+        // 停到最佳位置
+        for (int t = 0; t < 20; ++t) {
+            link.set_target(best_y, best_p, 0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+        std::printf("[SEEK][DONE] found=%d best armor=%d bars=%d yaw=%.2f pitch=%.2f\n",
+                    found ? 1 : 0, best_armor, best_bars, best_y, best_p);
+        // 存一张找到位置的标注图
+        {
+            cv::Mat img;
+            if (cam.read(img)) {
+                if (!raw) apply_img_dir(img);
+                const auto bs = extract_lightbars(img);
+                const auto as = match_armors(bs, hsv_value_channel(img));
+                cv::Mat d = img.clone();
+                draw_debug(d, bs, as);
+                const std::string p = out_dir + "/seek_found.jpg";
+                cv::imwrite(p, d);
+                std::printf("[SEEK] saved %s\n", p.c_str());
+            }
+        }
+        link.stop();
+        cam.close();
+        return 0;
+    }
 
     std::printf("\n快捷键: q/Esc 退出 | s 立刻存图 | T 换 Bayer 相位 | d 显示/隐藏灯条\n");
     std::printf("IMG_DIR=%d%s\n\n", IMG_DIR, raw ? " (--raw: 显示原始帧)" : "");

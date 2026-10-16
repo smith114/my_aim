@@ -81,6 +81,15 @@
       "presentation": { "panel": "dedicated", "clear": true }
     },
     {
+      "label": "★ 锁住当前姿态 (手动对准后用这个)",
+      "type": "shell",
+      "command": "./build/gimbal_test",
+      "args": ["--stay"],
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
       "label": "诊断: 读云台实测姿态",
       "type": "shell",
       "command": "./build/gimbal_test",
