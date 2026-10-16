@@ -86,6 +86,25 @@ static bool is_image_path(const std::string& p) {
 }
 
 // ------------------------------------------------------------------ 主程序
+// mode 字段的识别。
+//
+// 协议文档说 mode 是"参考固件固定发 0 的保留字段", 但实机实测它不是:
+// **它实际是下位机的视觉控制开关** —— 由车上鼠标右键切换, 由下位机实现。
+//   mode = 0 : 视觉控制关闭。下位机**完全忽略**上位机发的 yaw/pitch,
+//              云台不动(而且电机通常没使能, 会缓慢垂下来)。
+//   mode = 1 : 视觉控制开启, 我们的角度指令才生效。
+//
+// 这个区别极其重要, 因为两种情况在日志里长得一模一样(帧都在发、回传都正常),
+// 唯一差别就是 mode。所以这里显式识别并打日志, 并且在 mode!=1 时
+// **不更新伺服内部状态** —— 否则命令角会在一堆被忽略的指令上越积越偏。
+static const char* mode_name(int m) {
+    switch (m) {
+        case 0:  return "OFF  视觉控制未开启 -> 下位机忽略角度指令, 云台不会跟随";
+        case 1:  return "ON   视觉控制已开启 -> 角度指令生效";
+        default: return "?    未知取值(协议未定义)";
+    }
+}
+
 int main(int argc, char** argv) {
     std::string input_path;
     std::string snapshot_dir = "/tmp/myaim_shots";
@@ -390,7 +409,23 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             fb.pitch = sim_pitch_;
         }
         const bool fb_fresh = fb.valid && fb.age() < FEEDBACK_MAX_AGE_S;
-        if (fb_fresh) {
+
+        // ---- mode 识别: 变化时打一条醒目的日志 ----
+        // 首次拿到回传也要打一次, 这样"现在到底能不能控"一眼可见。
+        static int last_mode = -999;
+        if (fb_fresh && fb.mode != last_mode) {
+            if (last_mode == -999) {
+                LOG("[MODE] 当前 mode=%d : %s\n", fb.mode, mode_name(fb.mode));
+            } else {
+                LOG("[MODE] mode %d -> %d : %s\n", last_mode, fb.mode, mode_name(fb.mode));
+            }
+            last_mode = fb.mode;
+        }
+        // mode != 1 时指令会被下位机丢掉, 此时绝不能推进伺服内部状态,
+        // 否则命令角会在"没人听"的指令上持续累积, 等真正切到 mode=1 时会甩一下。
+        const bool vision_on = (fb.mode == 1);
+
+        if (fb_fresh && vision_on) {
             gimbal.update_feedback(fb.yaw, fb.pitch);
         }
 
@@ -402,9 +437,16 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             }
             theta_yaw   = candidates[follow].solve.yaw;
             theta_pitch = candidates[follow].solve.pitch + pitch_comp;
-            if (fb_fresh) {
+            if (fb_fresh && vision_on) {
                 gimbal.track(theta_yaw, theta_pitch);
                 if (tr.locked) last_locked_frame = frame_cnt;
+            } else if (fb_fresh && !vision_on) {
+                // 检出正常但下位机不接收 —— 每分钟只提醒一次, 避免刷屏
+                static int warn_cnt = 0;
+                if (++warn_cnt % 900 == 1) {
+                    LOG("[MODE][WARN] 检出装甲板但 mode=%d, 指令被忽略, 云台不会跟随。"
+                        "请在车上按鼠标右键进入视觉控制模式。\n", fb.mode);
+                }
             } else {
                 LOG("[WARN] 回传数据过期(%.3fs), 云台冻结\n", fb.age());
             }

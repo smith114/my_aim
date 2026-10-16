@@ -44,9 +44,19 @@ constexpr int LB_SAT_MIN = 140;
 constexpr int LB_VAL_MIN = 140;
 
 constexpr float LB_SHORT_MIN = 3.0f;      // 短边下限 px: 滤微噪点
-constexpr float LB_LONG_MIN  = 8.0f;      // 长边下限 px: 滤微噪点
-constexpr float LB_RATIO_MIN = 3.0f;      // 长宽比下限
-constexpr float LB_RATIO_MAX = 80.0f;     // 长宽比上限(正面细长灯带比例可 >40)
+constexpr float LB_LONG_MIN  = 8.0f;      // 长边下限 px (同济 min_lightbar_length=8)
+// 长宽比上下限 —— **这条是"远处识别不到装甲板"的直接原因, 已对齐同济**。
+//
+// 同济 configs/*.yaml: min_lightbar_ratio=1.5, max_lightbar_ratio=20
+// 我们原来用 3.0 ~ 80, 下限严了一倍。
+//
+// 为什么下限这么关键: 远处灯条在画面里只有几像素宽, 但 LED 的光晕会把宽度
+// 撑开(实测实验室物体的灯条: 35px 高 / 22px 宽 -> 比值只有 1.7)。
+// 要求 >=3.0 就等于**把所有远处目标一次性滤掉**, 只剩近处的大灯条。
+// 放宽到 1.5 之后远处目标才进得来, 代价是要靠后面的配对约束去滤误检。
+// 上限收到 20(原来 80)反而更严: 极细长的东西基本都是环境反光拉出的条纹。
+constexpr float LB_RATIO_MIN = 1.5f;
+constexpr float LB_RATIO_MAX = 20.0f;
 constexpr float LB_PURITY    = 8.0f;      // BGR 纯度差: 目标色通道均值须高出另两通道这么多
 constexpr int   LB_MAX_CANDIDATES = 60;   // 候选截断, 防配对 O(n^2) 卡顿
 constexpr double LB_MIN_CONTOUR_AREA = 12.0;
@@ -89,9 +99,11 @@ constexpr float PAIR_ANGLE_DIFF     = 15.0f;  // 两灯条平行度(度)
 #define ASPECT_PRESET_STD  1.6f   // 标准 140x125 满高灯带靶标(比赛用)
 
 #ifndef PAIR_ASPECT_MAX
-#define PAIR_ASPECT_MAX ASPECT_PRESET_LAB
+#define PAIR_ASPECT_MAX 5.0f
 #endif
-constexpr float PAIR_ASPECT_MIN = 0.25f;   // 只滤"细成一条线"的退化情况
+#ifndef PAIR_ASPECT_MIN
+#define PAIR_ASPECT_MIN 0.6f
+#endif
 //   (标准 RM 装甲板就是那样), 那么宽高比理论值 ~1.1, 上限应改回 ~1.6 ——
 // 装甲板中心暗区验证: 真板两灯之间是黑底, 环境假配对中心往往也亮
 constexpr float ARMOR_CENTER_V_MAX = 160.0f;  // 中心区域 HSV V 均值上限
@@ -197,18 +209,17 @@ constexpr const char* SERIAL_FALLBACK1 = "/dev/ttyACM1";
 constexpr bool ENABLE_FIRE = false;
 
 // ============================================================ 相机曝光
-// 实测(10-16)必须用**固定曝光**, 不能用连续自动曝光。
-// 场景特点是"整体很暗(背景 V_mean≈40) + 少量极亮的 LED", 连续自动曝光在这种
-// 高动态场景下会来回振荡, 表现为同一目标"这一帧检出、下一帧检不出",
-// 跟踪器因此咬不住锁(实测 armor 在 1.8 和 0.0 之间跳)。
-// 固定下来之后亮度稳定, 检出也就稳定了。
+// **短曝光 + 较高增益**, 对齐同济 configs/demo.yaml 的 exposure_ms=2 / gain=16。
 //
-// 值需要按现场光照调整: 太暗 -> 灯条分割不出来; 太亮 -> LED 过曝成一片白,
-// 饱和度掉光, 反而检不到。判断依据看 cam_view 的 HUD 里 V_mean
-// (建议 70~130) 以及 detect_probe -v 的灯条数量。
-constexpr bool  CAM_USE_AUTO_EXPOSURE = false;  // true = 用连续自动曝光(不推荐)
-constexpr float CAM_EXPOSURE_US = 20000.0f;     // 固定曝光时间, 微秒
-constexpr float CAM_GAIN_DB     = 10.0f;        // 固定增益, dB
+// 这里纠正一个我之前判断反了的地方: 一直以为"画面暗所以要加曝光",
+// 用 20 ms 长曝光, 结果是 LED **过曝成白团**、形状糊掉、长宽比暴跌,
+// 远处的小灯条直接检不出来。正确的是**缩短曝光**让 LED 不过曝, 保持细长形状。
+// 场景特点: 背景很暗 + 少数极亮 LED, 高动态范围 -> 必须压曝光保住 LED 形状。
+//
+// 实机验证方法: cam_view 的 HUD 里看 bars 数量, 以及灯条长宽比是否升高。
+constexpr bool  CAM_USE_AUTO_EXPOSURE = false;  // true = 连续自动(高动态场景会振荡)
+constexpr float CAM_EXPOSURE_US = 2000.0f;      // 2 ms (同济用 2 ms)
+constexpr float CAM_GAIN_DB     = 16.0f;        // 16 dB (同济用 16)
 // 传感器输出的是 Bayer 原始格式, 去马赛克的相位判错会让颜色彻底反过来,
 // 蓝/红灯条的色调分割就失效了。
 //

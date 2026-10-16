@@ -23,8 +23,12 @@ if(USE_STANDARD_TARGET)
   message(STATUS "靶标预设: 标准 140x125 满高灯带 (aspect 上限 1.6, 强约束)")
 else()
   add_compile_definitions(PAIR_ASPECT_MAX=5.0f)
-  message(STATUS "靶标预设: 实验室练习物体 (aspect 上限 5.0, 弱约束)")
+  message(STATUS "靶标预设: 通用 (aspect 上限 5.0, 与同济 max_armor_ratio=5 一致)")
 endif()
+
+# 装甲板宽高比下限。同济 min_armor_ratio=1, 我们原来 0.25 太松(会放进竖长条误配)。
+# 留一点余量取 0.6: 允许斜视时板变窄, 但不允许"高比宽大 4 倍"的怪形状。
+add_compile_definitions(PAIR_ASPECT_MIN=0.6f)
 
 find_package(OpenCV REQUIRED)
 find_package(Threads REQUIRED)
