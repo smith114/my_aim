@@ -11,6 +11,21 @@ endif()
 
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 
+# ---------------------------------------------------------------- 靶标预设
+# 比赛靶标规格书写的是 140x125mm 满高灯带 -> 宽高比约 1.23, 可以用强约束(1.6)。
+# 实验室那个练习物体灯条只有 35px 高、间距 122px -> 宽高比 4.02, 必须放宽到 5.0。
+# 两者不可能共用一个阈值, 所以做成开关。
+#
+#   cmake -S . -B build -DUSE_STANDARD_TARGET=ON     # 上比赛靶标前务必打开
+option(USE_STANDARD_TARGET "按标准 140x125 满高灯带靶标调参(比赛用)" OFF)
+if(USE_STANDARD_TARGET)
+  add_compile_definitions(PAIR_ASPECT_MAX=1.6f)
+  message(STATUS "靶标预设: 标准 140x125 满高灯带 (aspect 上限 1.6, 强约束)")
+else()
+  add_compile_definitions(PAIR_ASPECT_MAX=5.0f)
+  message(STATUS "靶标预设: 实验室练习物体 (aspect 上限 5.0, 弱约束)")
+endif()
+
 find_package(OpenCV REQUIRED)
 find_package(Threads REQUIRED)
 

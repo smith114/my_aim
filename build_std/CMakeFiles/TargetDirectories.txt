@@ -1,0 +1,17 @@
+/home/badtime/my_aim/build_std/CMakeFiles/my_aim.dir
+/home/badtime/my_aim/build_std/CMakeFiles/calibrate.dir
+/home/badtime/my_aim/build_std/CMakeFiles/gimbal_test.dir
+/home/badtime/my_aim/build_std/CMakeFiles/cam_view.dir
+/home/badtime/my_aim/build_std/CMakeFiles/test.dir
+/home/badtime/my_aim/build_std/CMakeFiles/edit_cache.dir
+/home/badtime/my_aim/build_std/CMakeFiles/rebuild_cache.dir
+/home/badtime/my_aim/build_std/tests/CMakeFiles/test_protocol.dir
+/home/badtime/my_aim/build_std/tests/CMakeFiles/test_solver.dir
+/home/badtime/my_aim/build_std/tests/CMakeFiles/test_armor.dir
+/home/badtime/my_aim/build_std/tests/CMakeFiles/test_tracker.dir
+/home/badtime/my_aim/build_std/tests/CMakeFiles/test_closed_loop.dir
+/home/badtime/my_aim/build_std/tests/CMakeFiles/synth_dump.dir
+/home/badtime/my_aim/build_std/tests/CMakeFiles/detect_probe.dir
+/home/badtime/my_aim/build_std/tests/CMakeFiles/test.dir
+/home/badtime/my_aim/build_std/tests/CMakeFiles/edit_cache.dir
+/home/badtime/my_aim/build_std/tests/CMakeFiles/rebuild_cache.dir
