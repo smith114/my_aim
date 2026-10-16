@@ -53,12 +53,28 @@ public:
         if (!inited_) {
             cmd_yaw   = yaw;
             cmd_pitch = pitch;
-            // 记录启动姿态, 作为安全包络的中心
-            home_yaw   = yaw;
-            home_pitch = pitch;
-            inited_    = true;
+            // 记录启动姿态, 作为安全包络的中心。
+            // 注意: 必须等数值稳定之后再锁 home, 否则开机第一帧的抖动值会把
+            // 整个包络定在错误的位置上, 之后云台就在错的区间里活动。
+            home_yaw     = yaw;
+            home_pitch   = pitch;
+            home_locked_ = false;
+            home_cnt_    = 0;
+            inited_      = true;
+            return;
+        }
+        // 前若干帧用滑动平均把 home 稳定下来
+        if (!home_locked_) {
+            home_yaw   = home_yaw * 0.7f + yaw * 0.3f;
+            home_pitch = home_pitch * 0.7f + pitch * 0.3f;
+            if (++home_cnt_ >= HOME_STABLE_FRAMES) {
+                home_locked_ = true;
+                std::printf("[GIMBAL] 启动姿态锁定 home=%.2f/%.2f\n", home_yaw, home_pitch);
+            }
         }
     }
+
+    bool home_stable() const { return home_locked_; }
 
     // 一帧跟踪: 输入相机系偏差角(度, +yaw = 目标偏右, +pitch = 目标偏下)
     // 返回是否产生了新的命令
@@ -195,6 +211,9 @@ private:
     }
 
     bool  inited_ = false;
+    bool  home_locked_ = false;
+    int   home_cnt_ = 0;
+    static constexpr int HOME_STABLE_FRAMES = 20;   // 约 0.2s @100Hz
     float sm_yaw_ = 0.0f;
     float sm_pitch_ = 0.0f;
     float scan_dir_ = 1.0f;

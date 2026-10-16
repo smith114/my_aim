@@ -355,14 +355,23 @@ int main(int argc, char** argv) {
         if (frame_cnt % 30 == 0) {
             const RxState s = link.state();
             LOG("[DET] f=%d bars=%.1f armor=%.1f solved=%.1f locked=%.1f state=%s "
-                "cmd=%.1f/%.1f fb=%.1f/%.1f th=%.1f/%.1f dir=%.0f rx=%llu resync=%llu wd=%llu\n",
+                "cmd=%.1f/%.1f fb=%.1f/%.1f home=%.1f/%.1f mode=%d th=%.1f/%.1f dir=%.0f "
+                "rx=%llu resync=%llu wd=%llu\n",
                 frame_cnt, stat_bars / 30.0, stat_armor / 30.0, stat_solved / 30.0,
                 stat_locked / 30.0, tracker.state_name(), gimbal.cmd_yaw, gimbal.cmd_pitch,
-                s.valid ? s.yaw : 0.0f, s.valid ? s.pitch : 0.0f, theta_yaw, theta_pitch,
-                gimbal.servo_dir,
+                s.valid ? s.yaw : 0.0f, s.valid ? s.pitch : 0.0f,
+                gimbal.home_yaw, gimbal.home_pitch,
+                s.valid ? s.mode : -1,
+                theta_yaw, theta_pitch, gimbal.servo_dir,
                 static_cast<unsigned long long>(link.rx_frames()),
                 static_cast<unsigned long long>(link.resync_drops()),
                 static_cast<unsigned long long>(link.watchdog_trips()));
+            // mode != 1 说明下位机没进入视觉控制模式, 此时它会完全忽略 ID1,
+            // 表现为"检测锁定正常、命令也在发, 但云台一动不动"
+            if (s.valid && s.mode != 1) {
+                LOG("[WARN] 下位机 mode=%d 不是 1, 视觉控制未开启 -> 云台不会跟随!\n"
+                     "       请在车上按鼠标右键进入视觉控制模式\n", s.mode);
+            }
             stat_bars = stat_armor = stat_solved = stat_locked = 0;
         }
 

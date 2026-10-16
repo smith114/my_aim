@@ -58,30 +58,38 @@ inline std::vector<LightBar> extract_lightbars(const cv::Mat& frame) {
     cv::Mat hsv;
     cv::cvtColor(proc, hsv, cv::COLOR_BGR2HSV);
 
-    // 蓝: H 100~130;  红: H 0~10 与 170~180
-    // S/V 放宽到 60 以兼容过曝 LED(过曝时颜色发白, 饱和度会掉下来)
+    // 蓝: H LB_HUE_LO~LB_HUE_HI;  红: H 0~10 与 170~180
+    // S/V 下限的取值理由见 config.hpp —— 它决定"灯条 vs 光晕/背景反光"的分界。
+    // 实测不要并入"过曝白核心": 那会把相邻 LED 芯片粘连, 灯条变宽、长宽比跌破阈值。
     std::vector<cv::Mat> masks(2);
-    cv::inRange(hsv, cv::Scalar(100, 60, 60), cv::Scalar(130, 255, 255), masks[0]);
+    cv::inRange(hsv, cv::Scalar(LB_HUE_LO, LB_SAT_MIN, LB_VAL_MIN),
+                cv::Scalar(LB_HUE_HI, 255, 255), masks[0]);
     {
         cv::Mat r1, r2;
-        cv::inRange(hsv, cv::Scalar(0, 60, 60), cv::Scalar(10, 255, 255), r1);
-        cv::inRange(hsv, cv::Scalar(170, 60, 60), cv::Scalar(180, 255, 255), r2);
+        cv::inRange(hsv, cv::Scalar(0, LB_SAT_MIN, LB_VAL_MIN), cv::Scalar(10, 255, 255), r1);
+        cv::inRange(hsv, cv::Scalar(170, LB_SAT_MIN, LB_VAL_MIN), cv::Scalar(180, 255, 255), r2);
         cv::bitwise_or(r1, r2, masks[1]);
     }
 
     std::vector<cv::Mat> bgr;
     cv::split(proc, bgr);
 
-    // 形态学: 先 CLOSE 连接灯条断点, 再 3x3 OPEN 去孤立噪点
-    // (用 5x5 OPEN 会把缩半后的小灯条一起腐蚀掉)
-    const cv::Mat kernel_close = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5));
-    const cv::Mat kernel_open  = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+    // 形态学: CLOSE 补掉 LED 芯片间因压缩噪点造成的小断裂; OPEN 可选(默认不做)。
+    // 核必须小, 否则相邻芯片会被并成宽块, 细长灯条变成一个方块。
+    const bool do_close = LB_MORPH_CLOSE_SIZE > 1;
+    const bool do_open  = LB_MORPH_OPEN_SIZE  > 1;
+    const cv::Mat kernel_close = cv::getStructuringElement(
+        cv::MORPH_RECT, cv::Size(std::max(1, LB_MORPH_CLOSE_SIZE),
+                                 std::max(1, LB_MORPH_CLOSE_SIZE)));
+    const cv::Mat kernel_open = cv::getStructuringElement(
+        cv::MORPH_RECT, cv::Size(std::max(1, LB_MORPH_OPEN_SIZE),
+                                 std::max(1, LB_MORPH_OPEN_SIZE)));
 
     std::vector<LightBar> bars;
     for (int c = 0; c < 2; ++c) {
-        cv::Mat bin;
-        cv::morphologyEx(masks[c], bin, cv::MORPH_CLOSE, kernel_close);
-        cv::morphologyEx(bin, bin, cv::MORPH_OPEN, kernel_open);
+        cv::Mat bin = masks[c].clone();
+        if (do_close) cv::morphologyEx(bin, bin, cv::MORPH_CLOSE, kernel_close);
+        if (do_open)  cv::morphologyEx(bin, bin, cv::MORPH_OPEN,  kernel_open);
 
         std::vector<std::vector<cv::Point>> contours;
         cv::findContours(bin, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);

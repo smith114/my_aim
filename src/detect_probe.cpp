@@ -43,6 +43,7 @@ int main(int argc, char** argv) {
     bool  verbose  = false;
     bool  use_cam  = false;
     bool  hold     = false;
+    bool  hold_current = false;
     float hold_yaw = 0.0f, hold_pitch = 0.0f;
     std::string bayer_arg;
 
@@ -50,6 +51,9 @@ int main(int argc, char** argv) {
         const std::string a = argv[i];
         if (a == "--cam") {
             use_cam = true;
+        } else if (a == "--hold-current") {
+            hold = true;
+            hold_current = true;
         } else if (a == "--hold" && i + 2 < argc) {
             hold = true;
             hold_yaw   = std::atof(argv[++i]);
@@ -64,7 +68,8 @@ int main(int argc, char** argv) {
             std::cout << "用法:\n"
                          "  detect_probe <图片|视频> [输出图] [--frames N] [-v]\n"
                          "  detect_probe --cam [输出图] [-v]\n"
-                         "  detect_probe --cam --hold YAW PITCH [输出图] [-v]\n";
+                         "  detect_probe --cam --hold YAW PITCH [输出图] [-v]\n"
+                         "  detect_probe --cam --hold-current [输出图] [-v]  原地抓帧, 不动云台\n";
             return 0;
         } else if (!a.empty() && a[0] != '-') {
             if (input.empty() && !use_cam) input = a;
@@ -91,6 +96,13 @@ int main(int argc, char** argv) {
                 st = link.state();
                 if (st.valid) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            if (hold_current) {
+                // 原地保持: 用当前实测角当命令, 云台不会动
+                hold_yaw   = st.yaw;
+                hold_pitch = st.pitch;
+                std::printf("[HOLD-CURRENT] 保持 yaw=%.2f pitch=%.2f (mode=%d)\n",
+                            hold_yaw, hold_pitch, st.mode);
             }
             for (int i = 0; i < 60; ++i) {
                 link.set_target(hold_yaw, hold_pitch, 0);
@@ -198,6 +210,40 @@ int main(int argc, char** argv) {
         std::printf("  %3zu  %5s  (%7.1f,%7.1f)  %6.1f %5.1f  %6.2f  %5.1f\n", i,
                     b.color == 0 ? "BLUE" : "RED", b.center.x, b.center.y, b.length, b.width,
                     b.length / std::max(b.width, 1e-3f), b.dir);
+    }
+
+    // ---------------------------------------------------------- 配对逐条约束
+    if (verbose) {
+        const cv::Mat vch = hsv_value_channel(frame);
+        printf("\n=== 配对约束逐条检查 (前 12 根) ===\n");
+        printf("  i  j  color dLen  dy/h  dx/h  dAng | 结果\n");
+        const int n = static_cast<int>(bars.size());
+        for (int i = 0; i < n && i < 12; ++i) {
+            for (int j = i + 1; j < n && j < 12; ++j) {
+                const auto& a = bars[i];
+                const auto& b = bars[j];
+                const float hmax = std::max(a.length, b.length);
+                const float hmin = std::min(a.length, b.length);
+                const float dlen = hmin / std::max(hmax, 1e-3f);
+                const float dy = std::fabs(a.center.y - b.center.y) / hmax;
+                const float dx = std::fabs(a.center.x - b.center.x) / hmax;
+                float ad = std::fabs(a.dir - b.dir);
+                if (ad > 90.0f) ad = 180.0f - ad;
+                const char* why = "OK";
+                if (a.color != b.color)                              why = "异色";
+                else if (dlen < PAIR_LEN_RATIO_MIN)                  why = "长度比";
+                else if (dy > PAIR_DY_RATIO_MAX)                     why = "y未对齐";
+                else if (dx < PAIR_DIST_RATIO_MIN)                   why = "太近";
+                else if (dx > PAIR_DIST_RATIO_MAX)                   why = "太远";
+                else if (ad > PAIR_ANGLE_DIFF)                       why = "不平行";
+                else if (!vch.empty() &&
+                         !armor_center_dark(vch, (a.center + b.center) * 0.5f,
+                                            std::fabs(a.center.x - b.center.x) * 0.35f,
+                                            hmax * 0.5f))               why = "中心不够暗";
+                printf("  %2d %2d  %s  %5.2f %5.2f %5.2f %5.1f | %s\n", i, j,
+                       a.color == 0 ? "B" : "R", dlen, dy, dx, ad, why);
+            }
+        }
     }
 
     // ---------------------------------------------------------- 配对

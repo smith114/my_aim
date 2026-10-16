@@ -30,6 +30,19 @@ constexpr int IMG_DIR = IMG_DIR_OVERRIDE;
 
 // ============================================================ 灯条提取
 // 灯条 = 装甲板上被点亮的 LED 灯带; HSV 色调分割后按细长条筛选
+constexpr int LB_HUE_LO = 100;   // 蓝色调范围 [100,130]
+constexpr int LB_HUE_HI = 130;
+
+// 饱和度/亮度下限。
+// 实机实测(10-16, 用真实靶标帧做参数网格搜索):
+//   60/60  太低 -> 光晕和背景反光一起进来, 掩码脏, 连通域被撑胖;
+//   140/140 最佳 -> 灯条干净, 长宽比 3.2~3.9, 配对几何一次通过;
+//   再高会开始丢远距离暗灯条。
+// 注意: **不要**把"过曝白核心"并进掩码。试过, 核心会把相邻 LED 芯片粘连,
+// 连通域变宽、长宽比掉到 2.3~2.8, 配对反而失败(灯条是"多颗芯片 + 暗缝"结构)。
+constexpr int LB_SAT_MIN = 140;
+constexpr int LB_VAL_MIN = 140;
+
 constexpr float LB_SHORT_MIN = 3.0f;      // 短边下限 px: 滤微噪点
 constexpr float LB_LONG_MIN  = 8.0f;      // 长边下限 px: 滤微噪点
 constexpr float LB_RATIO_MIN = 3.0f;      // 长宽比下限
@@ -37,6 +50,15 @@ constexpr float LB_RATIO_MAX = 80.0f;     // 长宽比上限(正面细长灯带�
 constexpr float LB_PURITY    = 8.0f;      // BGR 纯度差: 目标色通道均值须高出另两通道这么多
 constexpr int   LB_MAX_CANDIDATES = 60;   // 候选截断, 防配对 O(n^2) 卡顿
 constexpr double LB_MIN_CONTOUR_AREA = 12.0;
+
+// 形态学核大小。**CLOSE 核必须小**:
+// 一根灯带由多颗 LED 芯片串成, 芯片间有暗缝。5x5 CLOSE 会把相邻芯片并成一个
+// 宽块, 长宽比从 ~3.9 掉到 2.3~2.8, 正好撞在 LB_RATIO_MIN=3 上 ——
+// 灯条肉眼可见却检不出来(实测就是被这一条卡住)。3x3 足够补掉 JPEG 噪点
+// 造成的小断裂, 又不会糊掉几何。
+// OPEN 设 1 表示不执行: 分割已经干净, 再做开运算只会啃掉小灯条。
+constexpr int LB_MORPH_CLOSE_SIZE = 3;
+constexpr int LB_MORPH_OPEN_SIZE  = 1;
 
 // ============================================================ 装甲板配对
 // 全部用"相对灯条长度"的比例, 与目标远近无关
