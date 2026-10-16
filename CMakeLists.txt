@@ -69,6 +69,11 @@ aim_link(calibrate)
 add_executable(gimbal_test src/gimbal_test.cpp)
 aim_link(gimbal_test)
 
+# ---------------------------------------------------------------- 实时成像查看
+# 窗口实时显示相机画面 + 灯条/装甲板标注; --headless 时定期存图
+add_executable(cam_view src/cam_view.cpp)
+aim_link(cam_view)
+
 # ---------------------------------------------------------------- 离线推理自检
 # 用图片验证 YOLO/OpenVINO 环境是否可用, 不依赖相机
 find_package(OpenVINO QUIET)
