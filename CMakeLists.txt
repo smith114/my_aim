@@ -12,18 +12,26 @@ endif()
 add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 
 # ---------------------------------------------------------------- 靶标预设
-# 比赛靶标规格书写的是 140x125mm 满高灯带 -> 宽高比约 1.23, 可以用强约束(1.6)。
-# 实验室那个练习物体灯条只有 35px 高、间距 122px -> 宽高比 4.02, 必须放宽到 5.0。
-# 两者不可能共用一个阈值, 所以做成开关。
+# 说明: armor.hpp 里的"宽高比"是 **灯条间距 / 灯条长度** 的像素比值。
+# 它只在"灯条接近满板高"时才等于板子的真实宽高比。实机靶标的灯条比板高短,
+# 所以实测值偏大 —— 这也是为什么不能直接套 140/125=1.12。
 #
-#   cmake -S . -B build -DUSE_STANDARD_TARGET=ON     # 上比赛靶标前务必打开
-option(USE_STANDARD_TARGET "按标准 140x125 满高灯带靶标调参(比赛用)" OFF)
+# 实机标定(10-16, 正视):
+#   正确配对(夹着白色数字"2"的那两根灯条): aspect ≈ 2.84
+#   跨板误配(把隔壁板的灯条配进来):       aspect >= 4
+#   -> 上限取 3.5 收得下真板、拦得住跨板。
+#
+# 若以后确认靶标灯条是接近满板高的(比如标准 RM 装甲板), 开下面这个开关,
+# 上限收紧到 1.6, 约束会强得多。
+#
+#   cmake -S . -B build -DUSE_STANDARD_TARGET=ON
+option(USE_STANDARD_TARGET "靶标灯条接近满板高时收紧宽高比约束" OFF)
 if(USE_STANDARD_TARGET)
   add_compile_definitions(PAIR_ASPECT_MAX=1.6f)
-  message(STATUS "靶标预设: 标准 140x125 满高灯带 (aspect 上限 1.6, 强约束)")
+  message(STATUS "靶标预设: 灯条接近满板高 (aspect 上限 1.6, 强约束)")
 else()
-  add_compile_definitions(PAIR_ASPECT_MAX=5.0f)
-  message(STATUS "靶标预设: 通用 (aspect 上限 5.0, 与同济 max_armor_ratio=5 一致)")
+  add_compile_definitions(PAIR_ASPECT_MAX=3.5f)
+  message(STATUS "靶标预设: 通用 (aspect 上限 3.5, 按实机标定)")
 endif()
 
 # 装甲板宽高比下限。同济 min_armor_ratio=1, 我们原来 0.25 太松(会放进竖长条误配)。

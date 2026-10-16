@@ -228,10 +228,33 @@ inline std::vector<Armor> match_armors(const std::vector<LightBar>& bars,
             if (!hsv_v.empty() &&
                 !armor_center_dark(hsv_v, c, dx * 0.35f, hmax * 0.5f)) continue;
 
-            // 宽高比约束 —— 防跨板误配对。
-            // 构造出的板: 宽 = 灯条间距 + 灯条宽, 高 = 灯条长。
-            // 真板 140x125mm 正对时约 1.12, 斜视只会更小; 配到两块不同板上的
-            // 灯条时这个比值会冲到 3~7, 必须在这里拦掉。
+            // **两根灯条之间不允许再夹着别的同色灯条。**
+            //
+            // 这条是几何无关的强判据, 专治跨板误配:
+            //   真板的两根灯条就是这块板自己的左右边缘, 中间是暗板面, 不可能再夹灯条;
+            //   而把 A 板的灯条和 B 板的灯条配起来时, 中间往往还夹着别的灯条。
+            //
+            // 实测(10-16)踩的坑正是这个: 我把 x=579 和 x=752 配成了一块"板"
+            // (aspect 4.02), 而真正夹着白色数字"2"的那对是 x=579 和 x=659 ——
+            // 也就是 x=659 正好落在 579 和 752 中间。加上本条这种配对直接被否掉。
+            // 这条比宽高比可靠: 它不依赖"灯条是否占满板高"这个未必成立的假设。
+            {
+                const float lo = std::min(a.center.x, b.center.x);
+                const float hi = std::max(a.center.x, b.center.x);
+                bool blocked = false;
+                for (size_t k = 0; k < bars.size(); ++k) {
+                    if (&bars[k] == &a || &bars[k] == &b) continue;
+                    if (bars[k].color != a.color) continue;
+                    const float bx = bars[k].center.x;
+                    if (bx > lo + 2.0f && bx < hi - 2.0f) { blocked = true; break; }
+                }
+                if (blocked) continue;
+            }
+
+            // 宽高比约束 —— 拦明显不像板的形状。
+            // 注意"板高"这里是用**灯条长度**近似的, 只在灯条接近满板高时才准。
+            // 实测该靶标的灯条比板高短不少(灯条 31px 而板高约 45px+), 所以上下限
+            // 只能取得比较宽, 抓跨板主要靠上面那条"中间不能夹灯条"。
             const float half_h = hmax * 0.5f;
             const float half_w = dx * 0.5f + std::max(a.width, b.width) * 0.5f;
             const float aspect = (2.0f * half_w) / std::max(2.0f * half_h, 1e-3f);
