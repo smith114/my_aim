@@ -10,6 +10,33 @@
       "group": "build"
     },
     {
+      "label": "★★ 模拟锁定 (合成靶标跑完整链路, 不碰硬件)",
+      "type": "shell",
+      "command": "./build/my_aim",
+      "args": [
+        "--synth",
+        "--bearing", "${input:synthBearing}",
+        "--dist", "2.5",
+        "--frames", "240",
+        "--headless",
+        "--snapshot-dir", "diag/synth",
+        "--log", "diag/synth/run.log"
+      ],
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "★★ 模拟锁定 (开窗口看画面+检测框+黄框锁定)",
+      "type": "shell",
+      "command": "./build/my_aim",
+      "args": ["--synth", "--bearing", "${input:synthBearing}", "--dist", "2.5", "--debug"],
+      "options": { "env": { "DISPLAY": ":1" } },
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
       "label": "★ 视频验证: 单帧逐级诊断 (出标注图)",
       "type": "shell",
       "command": "./build/tests/detect_probe",
@@ -165,6 +192,12 @@
       "type": "promptString",
       "description": "取第几帧做诊断",
       "default": "300"
+    },
+    {
+      "id": "synthBearing",
+      "type": "promptString",
+      "description": "模拟靶标方位角(度)。视场内取 -15 ~ +15, 水平半视场只有 ±22",
+      "default": "20"
     }
   ]
 }

@@ -35,6 +35,7 @@
 #include "hik_camera.hpp"
 #include "protocol.hpp"
 #include "solver.hpp"
+#include "synth.hpp"
 #include "tracker.hpp"
 
 using namespace srm;
@@ -95,6 +96,14 @@ int main(int argc, char** argv) {
     bool save_video  = false;
     // 无目标时是否自动摆扫。默认关闭, 见 config.hpp 的 ENABLE_AUTO_SCAN 说明。
 bool auto_scan = ENABLE_AUTO_SCAN;
+
+// ---- 模拟靶标模式 (--synth) ----
+// 用合成装甲板代替相机, 喂给完整链路, 用来在没有硬件时验证"锁定"是否发生。
+bool  synth = false;
+float synth_bearing     = 20.0f;     // 靶标在世界系里的方位角(度), 相对初始光轴
+float synth_dist_mm     = 2500.0f;   // 靶标距离(mm)
+float synth_noise       = 0.0f;      // 图像高斯噪声标准差(0=干净)
+int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑制)
     int  max_frames  = 0;
     std::string bayer_name_arg;
 
@@ -110,6 +119,17 @@ bool auto_scan = ENABLE_AUTO_SCAN;
             save_video = true;
         } else if (a == "--scan") {
             auto_scan = true;
+        } else if (a == "--synth") {
+            synth = true;
+            force_mock = true;   // 模拟靶标必须配 mock 串口, 不能去打下位机
+        } else if (a == "--bearing" && i + 1 < argc) {
+            synth_bearing = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--dist" && i + 1 < argc) {
+            synth_dist_mm = static_cast<float>(std::atof(argv[++i])) * 1000.0f;
+        } else if (a == "--noise" && i + 1 < argc) {
+            synth_noise = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--distractors" && i + 1 < argc) {
+            synth_distractors = std::atoi(argv[++i]);
         } else if (a == "--bayer" && i + 1 < argc) {
             bayer_name_arg = argv[++i];
         } else if (a == "--snapshot-dir" && i + 1 < argc) {
@@ -123,9 +143,13 @@ bool auto_scan = ENABLE_AUTO_SCAN;
                          "              [--scan] [--bayer rg|bg|gr|gb]\n"
                          "              [--snapshot-dir DIR] [--log FILE]\n"
                          "              [--frames N] [video|image]\n"
-                         "  --dir-check     开启 SERVO_DIR 自动纠正(默认关闭, 实测会误判)\n"
                          "  --scan          无目标时自动摆扫找板(默认关闭: 操作手已手动对准,\n"
                          "                  摆扫反而会把靶标转出画面)\n"
+                         "  --synth         模拟靶标: 合成装甲板喂完整链路, 验证锁定(不碰硬件)\n"
+                         "  --bearing DEG   模拟靶标方位角, 度(默认 20)\n"
+                         "  --dist M        模拟靶标距离, 米(默认 2.5)\n"
+                         "  --noise N       合成图高斯噪声标准差(默认 0)\n"
+                         "  --distractors N 合成图随机亮斑干扰数(默认 0)\n"
                          "  --bayer         指定相机 Bayer 相位(默认见 config.hpp)\n";
             return 0;
         } else {
@@ -149,7 +173,10 @@ bool auto_scan = ENABLE_AUTO_SCAN;
     bool use_hik = false;
     const bool still_image = !input_path.empty() && is_image_path(input_path);
 
-    if (!input_path.empty()) {
+    if (synth) {
+        LOG("[INPUT] 模拟靶标 (不打开相机/视频)\n");
+        input_path.clear();
+    } else if (!input_path.empty()) {
         if (still_image) {
             const cv::Mat img = cv::imread(input_path, cv::IMREAD_COLOR);
             if (img.empty()) {
@@ -221,6 +248,11 @@ bool auto_scan = ENABLE_AUTO_SCAN;
         LOG("[GIMBAL] 等第一帧回传后再决定命令角(在此之前一帧都不发)\n");
     }
 
+    if (synth) {
+        LOG("[SYNTH] 模拟靶标: 方位 %.1f 度, 距离 %.2f m, 噪声 %.1f, 干扰 %d 个\n"
+            "        图像由 synth.hpp 合成, 但检测/配对/PnP/跟踪/伺服全是真实代码\n",
+            synth_bearing, synth_dist_mm / 1000.0f, synth_noise, synth_distractors);
+    }
     LOG("[GIMBAL] 无目标时%s (摆扫%s)\n",
         auto_scan ? "自动摆扫找板" : "原地保持等目标",
         auto_scan ? "已开启" : "默认关闭: 操作手已手动对准, 摆扫会把靶标转出画面");
@@ -249,13 +281,28 @@ bool auto_scan = ENABLE_AUTO_SCAN;
 
     while (g_stop == 0) {
         // ------------------------------------------------ 取帧
-        if (use_hik) {
+        if (synth) {
+            // 模拟靶标模式: 世界系里靶标固定在某个方位角, 相机光轴跟着模拟云台转。
+            // 生成的图像喂给**完整的检测/配对/PnP/跟踪/伺服链路** —— 除了图像来源,
+            // 后面每一个环节都是真的。用来在没有相机的情况下验证"锁定"是否发生。
+            //
+            // 几何: 目标相对光轴的夹角 theta = 目标方位 - 云台已转过的角度
+            //   (云台顺转 delta, 光轴也顺转 delta, 固定目标相对光轴就减少 delta)
+            const float turned = sim_yaw_ - 90.0f;
+            const float theta  = synth_bearing - turned;
+            srm::test::SynthPose pose;
+            pose.x_mm = synth_dist_mm * std::sin(theta * static_cast<float>(CV_PI) / 180.0f);
+            pose.z_mm = synth_dist_mm * std::cos(theta * static_cast<float>(CV_PI) / 180.0f);
+            pose.color = 0;
+            frame = srm::test::make_armor_image(pose, 1440, 1080, synth_noise).image;
+            if (synth_distractors > 0) srm::test::add_distractors(frame, synth_distractors);
+        } else if (use_hik) {
             if (!hik.read(frame)) continue;
         } else {
             file_cap >> frame;
             if (frame.empty()) break;
         }
-        apply_img_dir(frame);
+        if (!synth) apply_img_dir(frame);
         tracker.set_frame_size(frame.size());
         ++frame_cnt;
 
