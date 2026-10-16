@@ -239,9 +239,12 @@ bool auto_scan = ENABLE_AUTO_SCAN;
     int    frame_cnt = 0;
     int    stat_bars = 0, stat_armor = 0, stat_solved = 0, stat_locked = 0;
     int    last_locked_frame = -100000;
-// 最近一次"画面里有候选装甲板"的帧号。摆扫的触发看它, 不看 last_locked_frame ——
-// 见下方云台段的说明(用 locked 判断会导致"没锁定就乱扫"的恶性循环)。
-int    last_candidate_frame = -100000;
+    // 最近一次"画面里有候选装甲板"的帧号。摆扫的触发看它, 不看 last_locked_frame
+    // (用 locked 判断会导致"没锁定就乱扫"的恶性循环, 见下方云台段说明)。
+    int    last_candidate_frame = -100000;
+    // mock 模式(用视频离线跑)下的被控对象状态: 模拟云台实际角, 一阶滞后跟随命令
+    float  sim_yaw_   = 90.0f;
+    float  sim_pitch_ = 90.0f;
     float  last_bullet_speed = BULLET_SPEED_DEFAULT;
 
     while (g_stop == 0) {
@@ -321,23 +324,42 @@ int    last_candidate_frame = -100000;
             }
         }
 
+        // ------------------------------------------------ 取回传
+        // 真机走真实回传; mock 模式(没有下位机, 或用视频离线跑)用一个简单被控
+        // 对象模型顶上: 实测角按一阶滞后跟随上一条命令角。
+        //
+        // 为什么必须补这个: 原来这里只认真实回传, 而 mock 下 link.state() 永远
+        // 无效(age 极大), 于是 gimbal.track() 一次都不会被调用 —— 拿视频跑时伺服
+        // 根本不工作, "视频 -> 检测 -> 解算 -> 伺服" 这条链没法验证。
+        RxState fb = link.state();
+        const bool sim = force_mock || serial_fd < 0;
+        if (sim) {
+            fb.valid = true;
+            fb.mode  = 1;
+            fb.stamp = now_s();
+            sim_yaw_   += 0.35f * (gimbal.cmd_yaw   - sim_yaw_);
+            sim_pitch_ += 0.35f * (gimbal.cmd_pitch - sim_pitch_);
+            fb.yaw   = sim_yaw_;
+            fb.pitch = sim_pitch_;
+        }
+        const bool fb_fresh = fb.valid && fb.age() < FEEDBACK_MAX_AGE_S;
+        if (fb_fresh) {
+            gimbal.update_feedback(fb.yaw, fb.pitch);
+        }
+
         if (follow >= 0) {
             float pitch_comp = 0.0f;
             if (BALLISTIC_COMP_ENABLE) {
-                const RxState s = link.state();
-                const float v = s.has_bullet_speed ? s.bullet_speed : BULLET_SPEED_DEFAULT;
+                const float v = fb.has_bullet_speed ? fb.bullet_speed : BULLET_SPEED_DEFAULT;
                 pitch_comp = ballistic_pitch_deg(candidates[follow].solve.dist, v);
             }
             theta_yaw   = candidates[follow].solve.yaw;
             theta_pitch = candidates[follow].solve.pitch + pitch_comp;
-
-            // 回传数据必须新鲜, 否则冻结命令(下位机侧已有看门狗兜底)
-            if (const RxState s = link.state(); s.valid && s.age() < FEEDBACK_MAX_AGE_S) {
-                gimbal.update_feedback(s.yaw, s.pitch);
+            if (fb_fresh) {
                 gimbal.track(theta_yaw, theta_pitch);
                 if (tr.locked) last_locked_frame = frame_cnt;
             } else {
-                LOG("[WARN] 回传数据过期(%.3fs), 云台冻结\n", s.age());
+                LOG("[WARN] 回传数据过期(%.3fs), 云台冻结\n", fb.age());
             }
         } else {
             gimbal.stop_tracking();
@@ -348,17 +370,10 @@ int    last_candidate_frame = -100000;
             // 程序再自动摆扫只会把靶标转出画面, 实测就是这么丢掉目标的。
             // 想自动搜索时用 --scan。
             if (auto_scan && frame_cnt - last_candidate_frame > GIMBAL_SCAN_HOLD) {
-                if (const RxState s = link.state(); s.valid && s.age() < FEEDBACK_MAX_AGE_S) {
-                    gimbal.update_feedback(s.yaw, s.pitch);
-                }
-                gimbal.scan();
-            } else {
-                // 原地保持: 每帧把实测角原样发回, 云台就停在这儿等目标回来。
-                // 注意不能不发 —— 不发会触发下位机看门狗。
-                if (const RxState s = link.state(); s.valid && s.age() < FEEDBACK_MAX_AGE_S) {
-                    gimbal.update_feedback(s.yaw, s.pitch);
-                }
+                if (fb_fresh) gimbal.scan();
             }
+            // 不摆扫时什么都不做: 命令角保持不动, 云台就停在这儿等目标回来。
+            // (下面仍然每帧 set_target, 否则会触发下位机看门狗)
         }
 
         const int32_t fire = (ENABLE_FIRE && tr.locked) ? 1 : 0;
@@ -378,7 +393,7 @@ int    last_candidate_frame = -100000;
                 cv::line(disp, cv::Point2f(c.x, c.y - 22), cv::Point2f(c.x, c.y + 22),
                          cv::Scalar(0, 255, 0), 1);
             }
-            const RxState s = link.state();
+            const RxState& s = fb;   // 用伺服实际使用的回传(mock 下是模拟值)
             char buf[320];
             std::snprintf(buf, sizeof(buf),
                           "%s lock=%d cand=%d dist=%.2f th=%.1f/%.1f | cmd %.1f/%.1f"
@@ -398,7 +413,7 @@ int    last_candidate_frame = -100000;
         }
 
         if (frame_cnt % 30 == 0) {
-            const RxState s = link.state();
+            const RxState& s = fb;   // 同上: mock 下才有意义的值
             LOG("[DET] f=%d bars=%.1f armor=%.1f solved=%.1f locked=%.1f state=%s "
                 "cmd=%.1f/%.1f fb=%.1f/%.1f home=%.1f/%.1f mode=%d th=%.1f/%.1f "
                 "lock_age=%d rx=%llu resync=%llu wd=%llu\n",

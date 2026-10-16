@@ -10,6 +10,45 @@
       "group": "build"
     },
     {
+      "label": "★ 视频验证: 单帧逐级诊断 (出标注图)",
+      "type": "shell",
+      "command": "./build/tests/detect_probe",
+      "args": [
+        "${input:videoPath}",
+        "diag/video_probe.jpg",
+        "--frames", "${input:frameNo}",
+        "-v"
+      ],
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "★ 视频验证: 整段跑闭环 (mock 串口, 不碰硬件)",
+      "type": "shell",
+      "command": "./build/my_aim",
+      "args": [
+        "${input:videoPath}",
+        "--headless",
+        "--frames", "900",
+        "--snapshot-dir", "diag/video",
+        "--log", "diag/video/run.log"
+      ],
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "★ 视频验证: 开窗口看画面+检测框",
+      "type": "shell",
+      "command": "./build/my_aim",
+      "args": ["${input:videoPath}", "--debug"],
+      "options": { "env": { "DISPLAY": ":1" } },
+      "problemMatcher": [],
+      "dependsOn": "2. 编译",
+      "presentation": { "panel": "dedicated", "clear": true }
+    },
+    {
       "label": "2. 编译",
       "type": "shell",
       "command": "cmake",
@@ -112,6 +151,20 @@
       "type": "shell",
       "command": "pkill -f build/cam_view; pkill -f build/my_aim; echo 已释放",
       "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "videoPath",
+      "type": "promptString",
+      "description": "视频或图片路径",
+      "default": "/home/badtime/sp_vision_25/assets/demo/demo.avi"
+    },
+    {
+      "id": "frameNo",
+      "type": "promptString",
+      "description": "取第几帧做诊断",
+      "default": "300"
     }
   ]
 }
