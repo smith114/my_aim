@@ -250,7 +250,19 @@ constexpr float CALIB_SQUARE_MM = 30.0f;
 // 换模型后如果类别数或角点位置不同, 必须同步改 yolo_detector.hpp 里的
 // kCornerStart 和类别循环, 否则会静默给出错误框。
 constexpr const char* YOLO_MODEL_XML = "assets/yolo11.xml";
-constexpr float YOLO_CONF_THRESH = 0.4f;
-constexpr float YOLO_NMS_THRESH  = 0.3f;
+
+// 置信度阈值。取 0.3 而不是常见的 0.4/0.5, 依据是实测(10-24):
+//
+//   红色装甲板 (明亮、环境光充足)   max score = 0.90   -> 0.4 也够
+//   蓝色装甲板 (暗环境、仅 LED 自发光) max score = 0.32   -> 0.4 会漏掉
+//
+// 两个样例是用户提供的真实装甲板照片, 模型分类都正确(连板上的数字都读对了:
+// "3"->Rthree, "5"->Bfive), 只是蓝色那张因为画面暗、对比度低, 置信度压到 0.32。
+// 比赛场地上我们的相机看到的正是"暗背景 + LED 自发光", 所以按 0.3 定阈。
+//
+// 副作用: 阈值降低会放进更多低质量框。靠 NMS(0.3) 和下游 PnP 有效性
+// (距离 0.4~8m / 偏角 <60°) 兜底; 若现场误检变多, 用 --conf 临时提高。
+constexpr float YOLO_CONF_THRESH = 0.30f;
+constexpr float YOLO_NMS_THRESH  = 0.30f;
 
 }  // namespace srm
