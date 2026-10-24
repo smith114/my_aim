@@ -4,8 +4,13 @@
 // OpenVINO 与模型文件在目标机器上是可用的, 并输出一张画了框和角点的图。
 //
 // 用法:
-//   ./yolo_test <图片或视频> [输出图]
+//   ./yolo_test <图片或视频> [输出图] [--model path/to/model.xml]
 //   ./yolo_test yolo_frame0.jpg /tmp/yolo_out.jpg
+//
+// 换模型用 --model, 不用改代码:
+//   ./yolo_test frame.jpg out.jpg --model assets/yolov8.xml
+// 注意换模型后输出布局必须一致(38 类 + 4 角点), 否则后处理会静默给出错误框,
+// 详见 config.hpp 的 YOLO_MODEL_XML 说明。
 #include <iostream>
 #include <string>
 
@@ -15,9 +20,23 @@
 #include "yolo_detector.hpp"
 
 int main(int argc, char** argv) {
-    const std::string model = "assets/" + std::string("yolo11.xml");
-    const std::string input = (argc > 1) ? argv[1] : "yolo_frame0.jpg";
-    const std::string output = (argc > 2) ? argv[2] : "/tmp/yolo_out.jpg";
+    std::string model = srm::YOLO_MODEL_XML;
+    std::string input = "yolo_frame0.jpg";
+    std::string output = "/tmp/yolo_out.jpg";
+    bool have_input = false, have_output = false;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--model" && i + 1 < argc) {
+            model = argv[++i];
+        } else if (!have_input) {
+            input = a;
+            have_input = true;
+        } else if (!have_output) {
+            output = a;
+            have_output = true;
+        }
+    }
 
     std::cout << "[YOLO] model=" << model << " input=" << input << "\n";
     srm::YoloDetector det(model, srm::YOLO_CONF_THRESH, srm::YOLO_NMS_THRESH);

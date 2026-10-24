@@ -238,6 +238,17 @@ constexpr float CAM_GAIN_DB     = 16.0f;        // 16 dB (同济用 16)
 constexpr float CALIB_SQUARE_MM = 30.0f;
 
 // ============================================================ 模型
+// YOLO 是**备选方案**, 不在主流程 (主流程用 armor.hpp 的全图灯条法)。
+// 所以这里的取值只影响 yolo_test 自检和以后可能接入的神经网络初筛。
+//
+// 关于 YOLO11: 参考实现的配置里同时保留了 yolov5 / yolov8 / yolo11 三个模型,
+// 按 yolo_name 切换 (见 yolo.cpp 的 if-else)。已知 YOLO11 那条路有问题, 所以
+// **不要把这里当成唯一选项** —— 换模型只改这一行, 或者用 yolo_test --model 临时指定。
+//
+// 重要: 换 .xml/.bin **不是**随便拿一个就能跑。本模块的后处理写死了输出布局:
+//   [0..3] cx,cy,w,h | [4..41] 38 类分数 | [42..49] 4 个角点   (共 50 个 attr)
+// 换模型后如果类别数或角点位置不同, 必须同步改 yolo_detector.hpp 里的
+// kCornerStart 和类别循环, 否则会静默给出错误框。
 constexpr const char* YOLO_MODEL_XML = "assets/yolo11.xml";
 constexpr float YOLO_CONF_THRESH = 0.4f;
 constexpr float YOLO_NMS_THRESH  = 0.3f;
