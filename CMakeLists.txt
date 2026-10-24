@@ -84,8 +84,35 @@ function(aim_link target)
 endfunction()
 
 # ---------------------------------------------------------------- 主程序
+# OpenVINO 必须在 add_executable(my_aim) **之前** 探测, 因为主程序要按它决定
+# 是否编入 YOLO 检测分支 (HAVE_OPENVINO 宏), 以及是否链接 openvino::runtime。
+find_package(OpenVINO QUIET)
+
+# pip 安装的 openvino 不会进系统 CMAKE_PREFIX_PATH, 但包内自带 cmake 配置。
+# 这里主动问一下 python 它的位置, 让 `pip install openvino` 也能被找到 ——
+# 否则同一个包 python 能用、CMake 说没有, 很难理解。
+if(NOT OpenVINO_FOUND)
+  execute_process(
+    COMMAND python3 -c "import openvino,os;print(os.path.join(os.path.dirname(openvino.__file__),'cmake'))"
+    OUTPUT_VARIABLE _ov_pip_cmake OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(_ov_pip_cmake AND EXISTS "${_ov_pip_cmake}")
+    list(APPEND CMAKE_PREFIX_PATH "${_ov_pip_cmake}")
+    find_package(OpenVINO QUIET)
+    if(OpenVINO_FOUND)
+      message(STATUS "OpenVINO: 从 pip 安装位置找到 (${_ov_pip_cmake})")
+    endif()
+  endif()
+endif()
+
 add_executable(my_aim src/main.cpp)
 aim_link(my_aim)
+if(OpenVINO_FOUND)
+  target_compile_definitions(my_aim PRIVATE HAVE_OPENVINO=1)
+  target_link_libraries(my_aim PRIVATE openvino::runtime)
+  message(STATUS "YOLO 检测: 已编入主程序 (OpenVINO 可用), 可用 --yolo 启用")
+else()
+  message(STATUS "YOLO 检测: 未编入 (没找到 OpenVINO), 主程序只用灯条法")
+endif()
 
 # ---------------------------------------------------------------- 标定工具
 add_executable(calibrate src/calibrate.cpp)
@@ -103,12 +130,11 @@ aim_link(cam_view)
 
 # ---------------------------------------------------------------- 离线推理自检
 # 用图片验证 YOLO/OpenVINO 环境是否可用, 不依赖相机
-find_package(OpenVINO QUIET)
 if(OpenVINO_FOUND)
   add_executable(yolo_test src/yolo_test.cpp)
   target_link_libraries(yolo_test PRIVATE ${OpenCV_LIBS} openvino::runtime Threads::Threads)
 else()
-  message(STATUS "未找到 OpenVINO, 跳过 yolo_test (主程序不依赖它)")
+  message(STATUS "未找到 OpenVINO, 跳过 yolo_test")
 endif()
 
 # ---------------------------------------------------------------- 测试

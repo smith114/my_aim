@@ -38,6 +38,15 @@
 #include "synth.hpp"
 #include "tracker.hpp"
 
+// YOLO 检测分支只在装了 OpenVINO 时编入 (CMake 里 HAVE_OPENVINO)。
+// 没装 OpenVINO 的机器照样能编译, 只是少掉 --yolo 这条路。
+#ifdef HAVE_OPENVINO
+#include <memory>
+
+#include "yolo_armor.hpp"
+#include "yolo_detector.hpp"
+#endif
+
 using namespace srm;
 
 // ------------------------------------------------------------------ 全局
@@ -116,6 +125,20 @@ int main(int argc, char** argv) {
     // 无目标时是否自动摆扫。默认关闭, 见 config.hpp 的 ENABLE_AUTO_SCAN 说明。
 bool auto_scan = ENABLE_AUTO_SCAN;
 
+// ---- YOLO 检测 ----
+// 默认关闭: 模型目前在我们这种过曝/暗场景下会静默返回空(max score 0.04),
+// 用 --yolo 显式开启。开启后默认带灯条法兜底(hybrid)。
+bool use_yolo       = false;
+bool yolo_fallback  = true;    // YOLO 没结果时回退灯条法
+int  want_color     = -1;      // 颜色过滤: -1=不过滤 0=只蓝 1=只红
+std::string yolo_model = YOLO_MODEL_XML;
+float yolo_conf     = YOLO_CONF_THRESH;
+int   stat_yolo_boxes = 0;
+int   stat_detsrc[3] = {0, 0, 0};   // 0=灯条法 1=YOLO 2=YOLO空->回退
+#ifdef HAVE_OPENVINO
+std::unique_ptr<YoloDetector> yolo;
+#endif
+
 // ---- 模拟靶标模式 (--synth) ----
 // 用合成装甲板代替相机, 喂给完整链路, 用来在没有硬件时验证"锁定"是否发生。
 bool  synth = false;
@@ -138,6 +161,18 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             save_video = true;
         } else if (a == "--scan") {
             auto_scan = true;
+        } else if (a == "--yolo") {
+            use_yolo = true;
+        } else if (a == "--no-fallback") {
+            yolo_fallback = false;
+        } else if (a == "--model" && i + 1 < argc) {
+            yolo_model = argv[++i];
+        } else if (a == "--conf" && i + 1 < argc) {
+            yolo_conf = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--enemy" && i + 1 < argc) {
+            // 只想跟某一方时用它, 能直接滤掉对面装甲板
+            const std::string c = argv[++i];
+            want_color = (c == "red" || c == "r" || c == "1") ? 1 : 0;
         } else if (a == "--synth") {
             synth = true;
             force_mock = true;   // 模拟靶标必须配 mock 串口, 不能去打下位机
@@ -176,7 +211,30 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         }
     }
 
-    std::signal(SIGINT, on_signal);
+#ifdef HAVE_OPENVINO
+    if (use_yolo) {
+        try {
+            yolo = std::make_unique<YoloDetector>(yolo_model, yolo_conf, YOLO_NMS_THRESH);
+            LOG("[YOLO] 模型 %s  置信度 %.2f  兜底=%s\n",
+                yolo_model.c_str(), yolo_conf, yolo_fallback ? "开(灯条法)" : "关");
+        } catch (const std::exception& e) {
+            LOG("[YOLO][ERR] 模型加载失败: %s\n        回退到灯条法\n", e.what());
+            use_yolo = false;
+        }
+    }
+#else
+    if (use_yolo) {
+        LOG("[YOLO][WARN] 这个 build 没有编入 OpenVINO 支持, --yolo 无效。\n"
+            "            请在装了 OpenVINO 的机器上重新 cmake 配置并编译。\n");
+        use_yolo = false;
+    }
+    (void)yolo_fallback;
+    (void)want_color;
+    (void)yolo_conf;
+    (void)stat_yolo_boxes;
+#endif
+
+
     std::signal(SIGTERM, on_signal);
 
     if ((g_log = std::fopen(log_path.c_str(), "a")) != nullptr) {
@@ -321,19 +379,60 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             file_cap >> frame;
             if (frame.empty()) break;
         }
-        if (!synth) apply_img_dir(frame);
+        // IMG_DIR 是"相机倒装"的安装校正, **只对实相机帧生效**。
+        //
+        // 视频/图片文件本身就是正常朝向, 再转一次 180 度会让画面上下颠倒。
+        // 灯条法对这种颠倒还算鲁棒(形状不变), 但 YOLO 完全失效 ——
+        // 实测(10-24): 同一段同济 demo, 不转时 yolo_test 检出 score=0.88,
+        // 转了之后 my_aim 里 YOLO 全程 0 检出, 只能靠灯条法兜底。
+        // 这个 bug 之前一直存在, 只是因为没接 YOLO 才没暴露。
+        if (use_hik) apply_img_dir(frame);
         tracker.set_frame_size(frame.size());
         ++frame_cnt;
 
         // ------------------------------------------------ 检测
-        const auto bars = extract_lightbars(frame);
-        cv::Mat hsv, hsv_ch[3];
-        cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
-        cv::split(hsv, hsv_ch);
-        const auto armors = match_armors(bars, hsv_ch[2]);
+        //
+        // 检测器可替换: 两条路都产出 std::vector<Armor>, 下游 PnP/跟踪/伺服
+        // 完全不知道上游是谁。所以切换检测器不影响任何已验证的环节。
+        //
+        //   --yolo      神经网络为主, 灯条法兜底(hybrid)
+        //   默认        灯条法为主, 不开网络
+        //
+        // hybrid 的意义: YOLO 对"点亮的标准装甲板"召回高、且有 4 角点(不需要
+        // 配对约束), 但对我们这种过曝/杂乱场景会静默返回空; 灯条法在空场景稳,
+        // 在杂场景容易跨板误配。两者互补, 谁有结果用谁。
+        std::vector<LightBar> bars;
+        std::vector<Armor>    armors;
+        int det_source = 0;   // 0=灯条法 1=YOLO 2=YOLO空->回退灯条法
+
+#ifdef HAVE_OPENVINO
+        if (use_yolo && yolo) {
+            const auto boxes = yolo->detect(frame);
+            stat_yolo_boxes += static_cast<int>(boxes.size());
+            armors = filter_by_color(yolo_to_armors(boxes), want_color);
+            if (!armors.empty()) {
+                det_source = 1;
+            } else if (yolo_fallback) {
+                bars   = extract_lightbars(frame);
+                cv::Mat hsv0, ch0[3];
+                cv::cvtColor(frame, hsv0, cv::COLOR_BGR2HSV);
+                cv::split(hsv0, ch0);
+                armors = filter_by_color(match_armors(bars, ch0[2]), want_color);
+                det_source = 2;
+            }
+        } else
+#endif
+        {
+            bars = extract_lightbars(frame);
+            cv::Mat hsv0, ch0[3];
+            cv::cvtColor(frame, hsv0, cv::COLOR_BGR2HSV);
+            cv::split(hsv0, ch0);
+            armors = match_armors(bars, ch0[2]);
+        }
 
         stat_bars  += static_cast<int>(bars.size());
         stat_armor += static_cast<int>(armors.size());
+        stat_detsrc[det_source]++;
 
         // ------------------------------------------------ 解算 -> 候选
         std::vector<Target> candidates;
