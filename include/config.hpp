@@ -160,12 +160,24 @@ constexpr float GIMBAL_ENVELOPE_DEG = 30.0f;
 //   pitch : **上下有限**, 实测机械行程约 [-35.8, +26.1] 度 (以视觉模式零位为参考)
 //           命令继续增大时反馈卡住不动 = 顶到限位
 //
-// pitch 的绝对上下限随零位标定而变, 这里只放一个宽松的数值保护;
-// 真正的行程保护靠 GIMBAL_ENVELOPE_DEG 相对包络(与零位无关)。
+// **pitch 的上下限就是实测机械行程, 不是数值保护。**
+// 之前这里写的是 [-180, 180] 并注明"数值保护", 结果跨度正好 360, 让
+// wrap_or_clamp_pitch 走进了 wrap 分支: -30 度被归一成 330 度发下去,
+// 云台顶死机械限位。现在改成真实行程并强制 clamp。
+//
+// 为什么把实测行程写死是安全的: 相对包络(±GIMBAL_ENVELOPE_DEG)本身也有
+// 同样的问题 —— home 靠近上限时对称包络会越过行程(实测 home=+25 时包络上限
+// 是 +55, 超出机械上限 28.9 度), 云台照样顶死。用绝对行程硬限是唯一能真正
+// 挡住这种情况的手段。两道限制叠加: 相对包络管"别离瞄准点太远",
+// 绝对行程管"别顶到限位"。
+//
+// 风险与前提: 这两个数依赖下位机 pitch 零点不变。若以后零点被重新标定
+// (比如换了固件/重新上电归零方式变了), **必须重新实测行程并更新这两个值**,
+// 否则云台会在错误的高度上被限制住。测法: gimbal_test --sweep ±pitch --stop N
 constexpr float GIMBAL_YAW_MIN   = 0.0f;
 constexpr float GIMBAL_YAW_MAX   = 360.0f;   // >= 359 视为整圈(wrap)
-constexpr float GIMBAL_PITCH_MIN = -180.0f;  // 数值保护, 不是机械行程
-constexpr float GIMBAL_PITCH_MAX =  180.0f;
+constexpr float GIMBAL_PITCH_MIN = -35.8f;   // 实测机械下限
+constexpr float GIMBAL_PITCH_MAX =  26.1f;   // 实测机械上限
 
 // ============================================================ 无目标时的行为
 // **默认不摆扫。** 这一条是实测踩坑之后定的。

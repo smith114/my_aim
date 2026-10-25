@@ -81,6 +81,20 @@ public:
     bool track(float theta_yaw, float theta_pitch) {
         if (!have_meas) return false;   // 没有实测角就不动(避免拿错误基准乱指)
 
+        // 一开始跟踪就立刻冻结 home, 不能再继续做滑动平均。
+        //
+        // 为什么: home 是安全包络的中心, 它必须在**跟踪开始之前**就定死。
+        // 原来只在 update_feedback 里累计 20 帧才锁, 如果那 20 帧落在跟踪开始
+        // 之后(或操作手在 mode=0 时正用手推云台), home 会跟着云台一起漂移 ——
+        // 包络中心跟着动, 包络就等于失效。实测该场景 home 从 0.0 漂到 -32.64,
+        // 于是"命令角不超过 home±30"这条断言直接被破坏。
+        // 这里用当前已累计的估计值当场锁定, 之后不再变。
+        if (!home_locked_) {
+            home_locked_ = true;
+            std::printf("[GIMBAL] 开始跟踪, 冻结包络中心 home=%.2f/%.2f\n",
+                        static_cast<double>(home_yaw), static_cast<double>(home_pitch));
+        }
+
         tracking = true;
         last_theta_yaw = theta_yaw;
 
@@ -138,21 +152,29 @@ public:
 
     // 安全包络: 命令角不允许离启动姿态超过 ENVELOPE 度。
     //
-    // 为什么必须相对启动姿态而不是给绝对区间:
-    //   yaw 能整圈转, 但 pitch 有机械限位, 而零位并不是机壳行程的中点
-    //   (实测零位下 pitch=-38.3, 可行程只有约 [-35.8, +26.1])。
+    // 为什么用相对启动姿态而不是绝对区间:
+    //   yaw 能整圈转, 但 pitch 有机械限位, 而零位并不是机壳行程的中点。
     //   一旦 pitch 顶到限位, 反馈会卡住不再跟随命令; 如果还按绝对区间去比较,
     //   会得到一个错误的高度差, 云台就卡死在错的高度回不来。
-    //   相对包络与零位无关, 没有这个问题。
-    // 两轴都用 wrap_delta 比较, 跨 ±180 也能正确工作。
+    //
+    // **yaw 与 pitch 必须区别对待, 这是修过的 bug**:
+    //   yaw 是回绕轴, 跨 ±180 用 wrap_delta 比较、结果用 wrap360 归一是对的;
+    //   pitch 是有限行程轴, 既不能 wrap_delta 也不能 wrap360。
+    //   原实现两轴都套了 wrap360, 于是 home_pitch=3 时下包络 -27 被算成 333,
+    //   下位机收到 333 会理解成"转到最高", 云台直接顶死机械限位且无法自行恢复。
+    //   tests/gimbal_edge.cpp 专门测这一条。
     void apply_envelope() {
+        // yaw: 回绕轴
         const float dy = wrap_delta(cmd_yaw - home_yaw);
         if (dy >  GIMBAL_ENVELOPE_DEG) cmd_yaw = wrap360(home_yaw + GIMBAL_ENVELOPE_DEG);
         if (dy < -GIMBAL_ENVELOPE_DEG) cmd_yaw = wrap360(home_yaw - GIMBAL_ENVELOPE_DEG);
 
-        const float dp = wrap_delta(cmd_pitch - home_pitch);
-        if (dp >  GIMBAL_ENVELOPE_DEG) cmd_pitch = wrap360(home_pitch + GIMBAL_ENVELOPE_DEG);
-        if (dp < -GIMBAL_ENVELOPE_DEG) cmd_pitch = wrap360(home_pitch - GIMBAL_ENVELOPE_DEG);
+        // pitch: 有限行程轴 —— 先按相对包络限, 再按机械行程硬限, 全程 clamp。
+        // 两道都要: 相对包络防"离瞄准点太远", 机械行程防"顶到限位"。
+        const float dp = cmd_pitch - home_pitch;
+        if (dp >  GIMBAL_ENVELOPE_DEG) cmd_pitch = home_pitch + GIMBAL_ENVELOPE_DEG;
+        if (dp < -GIMBAL_ENVELOPE_DEG) cmd_pitch = home_pitch - GIMBAL_ENVELOPE_DEG;
+        cmd_pitch = clamp_val(cmd_pitch, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
     }
 
     // 查询/调试用: 直接给一个绝对命令角(绕过包络, 供 gimbal_test 工具使用)
@@ -195,8 +217,13 @@ private:
         if (GIMBAL_YAW_MAX - GIMBAL_YAW_MIN >= 359.0f) return wrap360(v);
         return clamp_val(v, GIMBAL_YAW_MIN, GIMBAL_YAW_MAX);
     }
+    // pitch **永远 clamp, 永不 wrap**。
+    //
+    // 原来这里和 yaw 一样按"跨度 >= 359 就 wrap"判断, 而配置里 pitch 正好是
+    // [-180, 180] 跨度 360, 于是走进了 wrap 分支 —— 结果 -30 度被归一成 330 度,
+    // 下位机据此把云台顶到最高处。pitch 是机械限位轴, 回绕在物理上就没有意义,
+    // 所以这里无条件 clamp, 不设 wrap 分支。
     float wrap_or_clamp_pitch(float v) const {
-        if (GIMBAL_PITCH_MAX - GIMBAL_PITCH_MIN >= 359.0f) return wrap360(v);
         return clamp_val(v, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
     }
     // 低通: 把输入滤波到 state 里, 并在死区内归零

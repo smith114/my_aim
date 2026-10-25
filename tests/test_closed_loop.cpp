@@ -206,8 +206,13 @@ int main() {
         GimbalCtrl gimbal;
         const float PITCH_LO = -35.8f;   // 实测下限
         const float PITCH_HI =  26.1f;   // 实测上限
-        gimbal.update_feedback(0.0f, 0.0f);
+        // 先喂满启动反馈把 home 锁定, 再开始跟踪。
+        // 真实系统就是这样: 下位机 48 Hz 持续回传, 操作手在 mode=0 下手动对准,
+        // 等进视觉模式开始跟踪时 home 早就稳定了。
+        // 若跳过这一步, home 会在跟踪过程中继续平均、跟着云台漂, 包络失效。
+        for (int i = 0; i < 30; ++i) gimbal.update_feedback(0.0f, 0.0f);
         const float home_p = gimbal.home_pitch;
+        CHECK(gimbal.home_stable());
 
         // 目标在很下方: 偏差角持续给 -60 度, 想让云台一直往下走
         for (int i = 0; i < 400; ++i) {

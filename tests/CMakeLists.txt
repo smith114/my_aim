@@ -7,6 +7,7 @@ set(TEST_TARGETS
   test_armor
   test_tracker
   test_closed_loop
+  gimbal_edge
 )
 
 foreach(t ${TEST_TARGETS})
