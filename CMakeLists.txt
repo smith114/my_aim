@@ -161,6 +161,14 @@ else()
   message(WARNING "servo_calib 需要 OpenVINO, 未编入")
 endif()
 
+# ---------------------------------------------------------------- 可视化调试界面
+add_executable(aim_gui src/aim_gui.cpp)
+aim_link(aim_gui)
+if(OpenVINO_FOUND)
+  target_compile_definitions(aim_gui PRIVATE HAVE_OPENVINO=1)
+  target_link_libraries(aim_gui PRIVATE openvino::runtime)
+endif()
+
 # ---------------------------------------------------------------- 同济 EKF (旋转目标)
 # 直接用同济 sp_vision_25 的 11 维 EKF 目标模型, 而不是自己重写:
 #   · 它把"四块板中的哪一块"建进观测模型(h_armor_xyz 依赖 id 与 armor_num)

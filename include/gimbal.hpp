@@ -40,6 +40,11 @@ public:
 
     // 伺服方向: **yaw 与 pitch 分开**, 两者实测就是相反的(见 config.hpp 推导)。
     float servo_dir_yaw   = SERVO_DIR_YAW;
+    // 运行时可调(可视化界面滑条 / 现场调参)。默认取 config.hpp 的值,
+    // 改成成员而不是直接用常量, 否则调参必须重编译 —— 现场没有那个时间。
+    float servo_gain        = SERVO_GAIN;
+    float aim_offset_yaw    = AIM_YAW_OFFSET_DEG;
+    float aim_offset_pitch  = AIM_PITCH_OFFSET_DEG;
     float servo_dir_pitch = SERVO_DIR_PITCH;
 
     // 状态
@@ -185,11 +190,11 @@ public:
         //   |theta| 大 -> 修正被限在 8 度 -> 分段逼近, 不会一次猛甩 30 度
         // 结构上**不可能累积**: 命令永远只比实测角大有限的一点点。
         // 减掉安装偏差: 修正量只针对"真正的瞄准误差", 不含相机与云台的固定错位。
-        const float ty_aim = ty - AIM_YAW_OFFSET_DEG;
-        const float tp_aim = tp - AIM_PITCH_OFFSET_DEG;
-        const float cy = clamp_val(servo_dir_yaw   * ty_aim * SERVO_GAIN * ramp,
+        const float ty_aim = ty - aim_offset_yaw;
+        const float tp_aim = tp - aim_offset_pitch;
+        const float cy = clamp_val(servo_dir_yaw   * ty_aim * servo_gain * ramp,
                                    -SERVO_MAX_CORR_DEG, SERVO_MAX_CORR_DEG);
-        const float cp = clamp_val(servo_dir_pitch * tp_aim * SERVO_GAIN * ramp,
+        const float cp = clamp_val(servo_dir_pitch * tp_aim * servo_gain * ramp,
                                    -SERVO_MAX_CORR_DEG, SERVO_MAX_CORR_DEG);
 
         last_want_yaw   = meas_yaw   + cy;
