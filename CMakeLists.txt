@@ -128,9 +128,9 @@ aim_link(my_aim)
 if(OpenVINO_FOUND)
   target_compile_definitions(my_aim PRIVATE HAVE_OPENVINO=1)
   target_link_libraries(my_aim PRIVATE openvino::runtime)
-  message(STATUS "YOLO 检测: 已编入主程序 (OpenVINO 可用), 可用 --yolo 启用")
+  message(STATUS "YOLO 检测: 已编入 my_aim (OpenVINO 可用)")
 else()
-  message(STATUS "YOLO 检测: 未编入 (没找到 OpenVINO), 主程序只用灯条法")
+  message(STATUS "YOLO 检测: my_aim 未编入 (没找到 OpenVINO)")
 endif()
 
 # ---------------------------------------------------------------- 标定工具
@@ -143,9 +143,19 @@ add_executable(gimbal_test src/gimbal_test.cpp)
 aim_link(gimbal_test)
 
 # ---------------------------------------------------------------- 实时成像查看
-# 窗口实时显示相机画面 + 灯条/装甲板标注; --headless 时定期存图
+# 窗口实时显示相机画面 + YOLO 检测标注; --headless 时定期存图
+#
+# **必须和 my_aim 一样编入 YOLO**: 否则窗口里显示的是另一套检测器的结果,
+# "窗口能看到但主程序没反应"这种不一致最难排查。之前漏了这一步, 现场就撞上了。
 add_executable(cam_view src/cam_view.cpp)
 aim_link(cam_view)
+if(OpenVINO_FOUND)
+  target_compile_definitions(cam_view PRIVATE HAVE_OPENVINO=1)
+  target_link_libraries(cam_view PRIVATE openvino::runtime)
+  message(STATUS "YOLO 检测: 已编入 cam_view (OpenVINO 可用)")
+else()
+  message(STATUS "YOLO 检测: cam_view 未编入 (没找到 OpenVINO)")
+endif()
 
 # ---------------------------------------------------------------- 离线推理自检
 # 用图片验证 YOLO/OpenVINO 环境是否可用, 不依赖相机

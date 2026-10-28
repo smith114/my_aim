@@ -1,4 +1,4 @@
-﻿// config.hpp: 所有可调参数集中在这里, 实车调参只改这个文件
+// config.hpp: 所有可调参数集中在这里, 实车调参只改这个文件
 #pragma once
 
 namespace srm {
@@ -129,14 +129,26 @@ constexpr int   TRACK_REACQUIRE_GAP   = 5;    // 中间连续多少帧无检测�
 // ============================================================ 云台控制
 // 控制律: 期望角 = 实测角 + SERVO_DIR * 相机系偏差角 * SERVO_GAIN
 //
-// SERVO_DIR 是唯一必须实机确认的符号, 含义是"增大 yaw 命令时, 目标在画面里
-// 朝哪边移动"。+1 = 目标在画面右侧时需要增大 yaw。
-// 原代码里的 GIMBAL_YAW_DIR=-1 是上一轮实机试出来的, 但那一版用的是"自己积分
-// 估计角"的发散写法, 符号本身没有可信度; 首次上实车请用 --dir-check 实测,
-// 或者直接看 NUC 上运行日志里 auto_dir_check 有没有把方向翻过来。
-constexpr float SERVO_DIR       = 1.0f;
+// SERVO_DIR 的语义: "增大 yaw 命令时, 目标在画面里朝哪边移动"。
+//   +1 = 目标移到画面右侧时需要**增大** yaw   (增大 yaw 让目标左移)
+//   -1 = 目标移到画面右侧时需要**减小** yaw   (增大 yaw 让目标右移)
+//
+// **实机判定为 -1**(10-28 现场):
+//   标注图上两个蓝板在像素 x≈1030~1060, 画面宽 1440 -> 目标在中心右侧;
+//   对应的相机系 PnP yaw = +13.0 度, 与"正 yaw = 目标在右"一致。
+//   按 +1 时命令增大 yaw 13 度, 现场观察云台**向左**转 —— 朝远离目标的方向,
+//   即正反馈: 越转目标越偏右, 偏角越大, 继续往左转。
+//   所以正确符号是 -1。
+//
+// 另外加了软启动(SERVO_SOFT_START_FRAMES): 进跟踪后的前十几帧把增益从 0
+// 线性升到 1, 这样切换视觉模式的瞬间不会因为一个较大的初始偏角猛拽一下。
+constexpr float SERVO_DIR       = -1.0f;
 constexpr float SERVO_GAIN      = 1.0f;   // 偏差角 -> 需要转过的角度 的比例
 constexpr float SERVO_MAX_STEP  = 2.0f;   // 每帧最大转动(度), 防大偏差猛甩
+// 软启动帧数: 进跟踪后增益从 0 线性升到 SERVO_GAIN。
+// 目的: 切换视觉模式的那一刻, 如果目标偏角较大, 不要一上来就满增益猛转。
+// 20 帧 @ 约 16fps 约 1.2 秒, 足够平缓又不至于明显迟钝。
+constexpr int   SERVO_SOFT_START_FRAMES = 20;
 constexpr float GIMBAL_SMOOTH   = 0.35f;  // 偏差角低通系数
 constexpr float GIMBAL_DEADBAND = 0.5f;   // 死区(度), 消极限环摆动
 constexpr float GIMBAL_MANUAL_STEP = 1.5f;// 手动控制步长(度/次)

@@ -46,6 +46,11 @@ static LoopOutcome run_loop(float bearing_rel_deg, float dist_mm, int steps,
                             float servo_lag = 0.6f, bool verbose = false) {
     Tracker    tracker;
     GimbalCtrl gimbal;
+        // 本测试检验的是**控制律算术**(期望角 = 实测角 + DIR*偏差 是否会收敛),
+        // 它内置的被控对象模型假定 "编码器增大 -> 光轴同向转", 即 DIR=+1。
+        // 实机 DIR 的符号是另一个问题(见 config.hpp 的实测说明), 在这里固定为 +1,
+        // 这样符号一旦在配置里改动, 不会把控制律本身的回归测试带崩。
+        gimbal.servo_dir = 1.0f;
     tracker.set_frame_size(cv::Size(1440, 1080));
     gimbal.update_feedback(90.0f, 90.0f);   // 下位机回传: 光轴在 0 位
 
@@ -161,6 +166,11 @@ int main() {
     {
         Tracker tracker;
         GimbalCtrl gimbal;
+        // 本测试检验的是**控制律算术**(期望角 = 实测角 + DIR*偏差 是否会收敛),
+        // 它内置的被控对象模型假定 "编码器增大 -> 光轴同向转", 即 DIR=+1。
+        // 实机 DIR 的符号是另一个问题(见 config.hpp 的实测说明), 在这里固定为 +1,
+        // 这样符号一旦在配置里改动, 不会把控制律本身的回归测试带崩。
+        gimbal.servo_dir = 1.0f;
         tracker.set_frame_size(cv::Size(1440, 1080));
         gimbal.update_feedback(90.0f, 90.0f);
         SynthPose pose;
@@ -190,6 +200,11 @@ int main() {
     // ---------------------------------------------------------- 场景 7: 没有回传数据时绝不乱动
     {
         GimbalCtrl gimbal;
+        // 本测试检验的是**控制律算术**(期望角 = 实测角 + DIR*偏差 是否会收敛),
+        // 它内置的被控对象模型假定 "编码器增大 -> 光轴同向转", 即 DIR=+1。
+        // 实机 DIR 的符号是另一个问题(见 config.hpp 的实测说明), 在这里固定为 +1,
+        // 这样符号一旦在配置里改动, 不会把控制律本身的回归测试带崩。
+        gimbal.servo_dir = 1.0f;
         CHECK(!gimbal.have_meas);
         CHECK(!gimbal.track(-15.0f, 5.0f));        // 无实测角 -> 拒绝跟踪
         CHECK_NEAR(gimbal.cmd_yaw, 90.0f, 1e-6);
@@ -204,6 +219,11 @@ int main() {
     // 比较就会算错高度差、卡死在错的高度; 用"相对启动姿态"的包络则能自己回来。
     {
         GimbalCtrl gimbal;
+        // 本测试检验的是**控制律算术**(期望角 = 实测角 + DIR*偏差 是否会收敛),
+        // 它内置的被控对象模型假定 "编码器增大 -> 光轴同向转", 即 DIR=+1。
+        // 实机 DIR 的符号是另一个问题(见 config.hpp 的实测说明), 在这里固定为 +1,
+        // 这样符号一旦在配置里改动, 不会把控制律本身的回归测试带崩。
+        gimbal.servo_dir = 1.0f;
         const float PITCH_LO = -35.8f;   // 实测下限
         const float PITCH_HI =  26.1f;   // 实测上限
         // 先喂满启动反馈把 home 锁定, 再开始跟踪。
@@ -246,6 +266,11 @@ int main() {
     // ---------------------------------------------------------- 场景 9: yaw 整圈可用
     {
         GimbalCtrl gimbal;
+        // 本测试检验的是**控制律算术**(期望角 = 实测角 + DIR*偏差 是否会收敛),
+        // 它内置的被控对象模型假定 "编码器增大 -> 光轴同向转", 即 DIR=+1。
+        // 实机 DIR 的符号是另一个问题(见 config.hpp 的实测说明), 在这里固定为 +1,
+        // 这样符号一旦在配置里改动, 不会把控制律本身的回归测试带崩。
+        gimbal.servo_dir = 1.0f;
         gimbal.update_feedback(0.0f, 0.0f);
         gimbal.force_set(0.0f, 0.0f);
         // 连续正向手动转, 应能绕整圈而不被夹住

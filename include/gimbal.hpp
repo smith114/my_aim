@@ -96,15 +96,27 @@ public:
         }
 
         tracking = true;
+
+        // 软启动: 进跟踪后的前 SERVO_SOFT_START_FRAMES 帧, 增益从 0 线性升到 1。
+        // 目的: 切换视觉模式那一瞬间, 如果目标偏角较大, 不要立刻满增益猛拽一下 ——
+        // 使用者反馈过"一开自瞄就往一边偏", 除了符号问题, 起手的阶跃感也需要平掉。
+        // soft_cnt_ 在 stop_tracking() 里清零, 所以每次切模式都会重新软启动。
+        const float ramp =
+            (SERVO_SOFT_START_FRAMES <= 0)
+                ? 1.0f
+                : std::min(1.0f, static_cast<float>(soft_cnt_) /
+                                      static_cast<float>(SERVO_SOFT_START_FRAMES));
+        if (soft_cnt_ < SERVO_SOFT_START_FRAMES) ++soft_cnt_;
+
         last_theta_yaw = theta_yaw;
 
         // 低通 + 死区, 抑制角点噪声引起的抖动
         const float ty = smooth(theta_yaw, sm_yaw_);
         const float tp = smooth(theta_pitch, sm_pitch_);
 
-        // 期望角 = 实测角 + 方向 * 偏差
-        const float want_yaw   = meas_yaw   + servo_dir * ty * SERVO_GAIN;
-        const float want_pitch = meas_pitch + servo_dir * tp * SERVO_GAIN;
+        // 期望角 = 实测角 + 方向 * 偏差 * 增益 * 软启动系数
+        const float want_yaw   = meas_yaw   + servo_dir * ty * SERVO_GAIN * ramp;
+        const float want_pitch = meas_pitch + servo_dir * tp * SERVO_GAIN * ramp;
 
         // 限幅步进: 每帧最多转 SERVO_MAX_STEP 度, 防大偏差时猛甩
         cmd_yaw   = step_toward(cmd_yaw,   want_yaw,   SERVO_MAX_STEP);
@@ -145,7 +157,14 @@ public:
         scan_dir_ = 1.0f;
     }
 
-    void stop_tracking() { tracking = false; }
+    void stop_tracking() {
+        tracking = false;
+        // 每次重新进入跟踪都重新软启动, 并清掉低通状态 ——
+        // 否则上次遗留的偏差会被当成这次的初始值, 起手就是一跳。
+        soft_cnt_ = 0;
+        sm_yaw_   = 0.0f;
+        sm_pitch_ = 0.0f;
+    }
 
     float home_yaw   = 0.0f;   // 启动姿态(安全包络中心)
     float home_pitch = 0.0f;
@@ -246,6 +265,7 @@ private:
     float scan_dir_ = 1.0f;
     int   scan_cnt_ = 0;
     int   dir_bad_streak_ = 0;
+    int   soft_cnt_ = 0;      // 软启动帧计数, stop_tracking 时清零
 
     // 把角度差规整到 (-180, 180], 用于跨 0/360 的比较
     static float wrap_delta(float d) {

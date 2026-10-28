@@ -535,7 +535,17 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         // 否则命令角会在"没人听"的指令上持续累积, 等真正切到 mode=1 时会甩一下。
         const bool vision_on = (fb.mode == 1);
 
-        if (fb_fresh && vision_on) {
+        // **实测角必须无条件更新**, 与 mode 无关。
+        //
+        // 之前的写法是"mode!=1 就不 update_feedback", 目的是防止指令被丢弃时
+        // 伺服内部状态累积。但副作用更严重: mode=0 时 meas 和 home 永远停在
+        // 默认值(90/90 和 0/0), 日志里 cmd=90.00 fb=18.93 home=0.00 全是假的,
+        // 而且 home 错了之后安全包络的中心也是错的 —— 一旦切到 mode=1,
+        // 包络会以 0/0 为中心, 直接把云台拉向错误方向。
+        //
+        // 正确做法: 实测角/hom 始终跟真实回传走; 只有**推进伺服**那一步
+        // (即 gimbal.track()) 才要求 vision_on, 因为那才是会产生指令的动作。
+        if (fb_fresh) {
             gimbal.update_feedback(fb.yaw, fb.pitch);
         }
 
