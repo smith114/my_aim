@@ -33,6 +33,7 @@
 #include "config.hpp"
 #include "gimbal.hpp"
 #include "hik_camera.hpp"
+#include "fire.hpp"
 #include "kf.hpp"
 #include "protocol.hpp"
 #include "solver.hpp"
@@ -132,6 +133,7 @@ bool auto_scan = ENABLE_AUTO_SCAN;
 // **YOLO 是唯一检测器** —— 灯条法已从主流程移除(sort 见下方检测段注释)。
 bool use_yolo       = true;
 bool hold_only      = false;   // --hold: 只保持姿态, 不推进伺服
+bool cli_enable_fire = false;  // --fire: 允许 fire_flag=1
 // 运行时覆盖伺服方向, 便于现场一次试完 4 种组合而不用重编译。
 // 0 表示"不覆盖, 用 config.hpp 的值"。
 float cli_dir_yaw   = 0.0f;
@@ -178,6 +180,9 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             cli_dir_yaw = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--dir-pitch" && i + 1 < argc) {
             cli_dir_pitch = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--fire") {
+            // 显式开启开火建议。默认关, 避免调轨迹时误触发。
+            cli_enable_fire = true;
         } else if (a == "--hold") {
             // 只保持当前姿态: 不做任何伺服推进, 检测照跑(便于观察),
             // 云台一动不动。用于"确认切换瞬间不会动"和现场比对。
@@ -524,20 +529,52 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         // 目标慢慢漂出画面, 然后彻底丢失。改成"只要有候选就先往它那儿转",
         // 云台把目标往画面中心压, 检测反而更稳, 锁定是水到渠成的结果。
         // 这也是常规做法: 跟踪器负责"跟哪一个 + 平滑", 而不是负责"要不要动"。
+        // ------------------------------------------------ 选哪一块板
+        //
+        // 问题(实测): 旋转靶标在某些角度会**同时看到两块板**, 于是选点在两块之间
+        // 来回跳, 云台就左右抖。单纯"取离画面中心最近的"必然抖 —— 两块对称时
+        // 距离几乎相等, 噪声就决定了选谁。
+        //
+        // 三条规则合起来止跳:
+        //   1) **迟滞**: 优先留在上一帧选中的那块, 只有它消失或明显更差才换
+        //   2) **板面朝向**: 两块都能看到时, 选 |yaw_raw| 更小的 —— 它更正对相机,
+        //      打它有效命中面积最大。这是物理判据, 不是启发式
+        //   3) 换目标需要**足够的改善幅度**(kSwitchMargin), 避免在临界点抖动
+        static int   sel_idx   = -1;
+        static float sel_yaw   = 0.0f;   // 上一帧选中板的解算角度, 用于识别"还是那一块"
         int follow = -1;
-        if (tr.locked && tr.index >= 0) {
-            follow = tr.index;
-        } else if (!candidates.empty()) {
-            float best = 1e9f;
-            const cv::Point2f img_c(static_cast<float>(frame.cols) * 0.5f,
-                                    static_cast<float>(frame.rows) * 0.5f);
+        if (!candidates.empty()) {
+            constexpr float kSwitchMargin = 1.35f;   // 新目标要好几倍才换
+            int   best_i   = -1;
+            float best_cost = 1e9f;
+            int   prev_i   = -1;
+            float prev_cost = 1e9f;
+
             for (size_t i = 0; i < candidates.size(); ++i) {
-                const float d = cv::norm(candidates[i].center - img_c);
-                if (d < best) {
-                    best = d;
-                    follow = static_cast<int>(i);
+                // 代价 = 板面朝向(主要) + 与上一帧选中位置的角度差(连续性)
+                const float facing = std::fabs(candidates[i].solve.yaw_raw) * 57.29578f;
+                const float cont   = std::fabs(candidates[i].solve.yaw - sel_yaw);
+                const float cost   = facing + 0.5f * cont;
+                if (cost < best_cost) { best_cost = cost; best_i = static_cast<int>(i); }
+                // 找出"就是上一帧那一块"的候选(角度接近)
+                if (sel_idx >= 0 && cont < SELECT_SAME_TARGET_DEG && cost < prev_cost) {
+                    prev_cost = cost;
+                    prev_i = static_cast<int>(i);
                 }
             }
+
+            // 迟滞: 还能看到原来那块, 且新最优没有明显更好 -> 不换
+            if (prev_i >= 0 && best_cost * kSwitchMargin > prev_cost) {
+                follow = prev_i;
+            } else {
+                follow = best_i;
+            }
+            if (follow >= 0) {
+                sel_idx = follow;
+                sel_yaw = candidates[follow].solve.yaw;
+            }
+        } else {
+            sel_idx = -1;   // 没有候选 -> 忘掉上次选择
         }
 
         // ------------------------------------------------ 取回传
@@ -653,7 +690,52 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             // (下面仍然每帧 set_target, 否则会触发下位机看门狗)
         }
 
-        const int32_t fire = (ENABLE_FIRE && tr.locked) ? 1 : 0;
+        // ------------------------------------------------ 开火判据
+        //
+        // 全部条件满足才给 fire_flag=1。每一条都是"没有它就可能打错"的:
+        //   1. ENABLE_FIRE       显式开启(调轨迹时不该误触发)
+        //   2. tr.locked         跟踪器已确认锁定
+        //   3. mode==1           视觉模式已开, 指令才会被下位机接受
+        //   4. 回传新鲜           不能拿过期姿态算出的角度开火
+        //   5. 目标存在且距离合理  超过 FIRE_MAX_DIST_M 不开
+        //   6. 连续锁定帧数够      防止单帧误检触发
+        //   7. 弹速有效           否则弹道补偿是错的
+        //   8. |预测偏差| <= 容差  容差随距离缩放(见下)
+        //
+        // 第 8 条是核心: 容差按"装甲板在当前距离下的角宽度"缩放。
+        // 板宽 140mm, 角宽 = 2*atan(0.07/dist), 取 0.6 倍打板中央。
+        // 固定角度容差是错的 —— 2m 处板很宽, 8m 处很窄, 同一个度数含义完全不同。
+        // 用 fire.hpp 里的 fire_decision(): 离线测试覆盖的就是实车跑的这份逻辑,
+        // 不允许存在"测试一套、实车另一套"。
+        static int fire_lock_streak = 0;
+        const float f_dist  = (follow >= 0) ? candidates[follow].solve.dist : 0.0f;
+        const float f_speed = fb.has_bullet_speed ? fb.bullet_speed : last_bullet_speed;
+        const bool  f_prev  = (fire_lock_streak >= FIRE_LOCK_FRAMES);
+        const bool  fire_ok = fire_decision(
+            (ENABLE_FIRE || cli_enable_fire), tr.locked, vision_on, fb_fresh,
+            (follow >= 0), f_dist, theta_yaw, theta_pitch, f_speed, fire_lock_streak);
+
+        // 连击计数: 基本条件都满足才累加(与判据里的锁定帧数门限配合)
+        const bool f_base = (ENABLE_FIRE || cli_enable_fire) && tr.locked && vision_on &&
+                            fb_fresh && (follow >= 0) && f_dist > 0.5f &&
+                            f_dist <= FIRE_MAX_DIST_M && f_speed > FIRE_MIN_BULLET_SPEED;
+        if (f_base) {
+            if (fire_lock_streak < FIRE_LOCK_FRAMES) ++fire_lock_streak;
+        } else {
+            fire_lock_streak = 0;
+        }
+
+        if (fire_ok && !f_prev) {
+            LOG("[FIRE] 开火: dist=%.2fm 板角宽=%.2f度 容差=%.2f度 误差=%.2f度\n",
+                static_cast<double>(f_dist),
+                static_cast<double>(plate_angular_width_deg(f_dist)),
+                static_cast<double>(fire_tolerance_deg(f_dist)),
+                static_cast<double>(std::sqrt(theta_yaw * theta_yaw +
+                                              theta_pitch * theta_pitch)));
+        } else if (!fire_ok && f_prev) {
+            LOG("[FIRE] 停火\n");
+        }
+        const int32_t fire = fire_ok ? 1 : 0;
         link.set_target(gimbal.cmd_yaw, gimbal.cmd_pitch, fire);
 
         // ------------------------------------------------ 可视化
