@@ -358,6 +358,43 @@ int main(int argc, char** argv) {
         }
         std::snprintf(b, sizeof(b), "%.2f m", static_cast<double>(dist));
         row(pnl, y, "dist", b, OR);
+
+        // ---- 角点坐标 + 与理论宽度的对照 ----
+        // 板只有 20 几像素, 屏幕上的编号看不清。用数字更可靠:
+        //   1) 四个角点的原始像素坐标
+        //   2) 角点构成的外接宽/高
+        //   3) **理论宽度** = ARMOR_W * fx / dist
+        //
+        // 第 2 项和第 3 项必须接近。差很多说明: 角点取的不是板外缘,
+        // 或者 ARMOR_W 与实际板宽不符 —— 那 PnP 距离和中心都会偏。
+        if (follow >= 0 && follow < static_cast<int>(armors.size())) {
+            const auto& P = armors[follow].pts;
+            if (P.size() == 4) {
+                for (size_t j = 0; j < 4; ++j) {
+                    std::snprintf(b, sizeof(b), "(%.0f, %.0f)",
+                                  static_cast<double>(P[j].x), static_cast<double>(P[j].y));
+                    row(pnl, y, (std::string("kp") + std::to_string(j)).c_str(), b, GY);
+                }
+                float mnx = P[0].x, mxx = P[0].x, mny = P[0].y, mxy = P[0].y;
+                for (const auto& q : P) {
+                    mnx = std::fmin(mnx, q.x); mxx = std::fmax(mxx, q.x);
+                    mny = std::fmin(mny, q.y); mxy = std::fmax(mxy, q.y);
+                }
+                const float bw = mxx - mnx, bh = mxy - mny;
+                std::snprintf(b, sizeof(b), "%.0f x %.0f px", static_cast<double>(bw),
+                              static_cast<double>(bh));
+                row(pnl, y, "box", b, GY);
+                // 理论宽度: 板上 140mm 在 dist 处的像素宽度
+                const float theo = (dist > 0.1f)
+                    ? ARMOR_W * CAM_FX / (dist * 1000.0f) : 0.0f;
+                std::snprintf(b, sizeof(b), "%.0f px  %s", static_cast<double>(theo),
+                              (theo > 1.0f && std::fabs(bw - theo) > theo * 0.25f)
+                                  ? "** MISMATCH **" : "ok");
+                row(pnl, y, "theory w", b,
+                    (theo > 1.0f && std::fabs(bw - theo) > theo * 0.25f)
+                        ? cv::Scalar(80, 80, 255) : GN);
+            }
+        }
         {
             std::snprintf(b, sizeof(b), "%.1f / %.1f deg",
                           static_cast<double>(plate_angular_width_deg(dist)),
