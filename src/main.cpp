@@ -130,6 +130,7 @@ bool auto_scan = ENABLE_AUTO_SCAN;
 // 用 --yolo 显式开启。开启后默认带灯条法兜底(hybrid)。
 // **YOLO 是唯一检测器** —— 灯条法已从主流程移除(sort 见下方检测段注释)。
 bool use_yolo       = true;
+bool hold_only      = false;   // --hold: 只保持姿态, 不推进伺服
 int  want_color     = -1;      // 颜色过滤: -1=不过滤 0=只蓝 1=只红
 int  yolo_profile_sel = YOLO_PROFILE_SELECT;   // 见 config.hpp, 当前默认 v11
 float yolo_conf     = YOLO_CONF_THRESH;
@@ -163,6 +164,10 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             auto_scan = true;
         } else if (a == "--yolo") {
             use_yolo = true;   // 默认已开, 保留兼容
+        } else if (a == "--hold") {
+            // 只保持当前姿态: 不做任何伺服推进, 检测照跑(便于观察),
+            // 云台一动不动。用于"确认切换瞬间不会动"和现场比对。
+            hold_only = true;
         } else if (a == "--no-fallback") {
             // 兼容旧参数: 现在本来就没有灯条法兜底了, 保留只为不报错
         } else if (a == "--model" && i + 1 < argc) {
@@ -549,7 +554,18 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             gimbal.update_feedback(fb.yaw, fb.pitch);
         }
 
-        if (follow >= 0) {
+        if (hold_only) {
+            // --hold: 检测照跑并打印(可以看 theta 有多大), 但**一帧都不推进伺服**。
+            // 命令角保持不动, 云台就停在原地。
+            // 用途: ① 验证"切换视觉模式时不动"; ② 量出目标相对光轴的偏角有多大,
+            // 从而判断是"目标本来没对准"还是"解算有系统偏差"。
+            if (follow >= 0) {
+                theta_yaw   = candidates[follow].solve.yaw;
+                theta_pitch = candidates[follow].solve.pitch;
+            }
+            gimbal.stop_tracking();
+            if (fb_fresh) gimbal.update_feedback(fb.yaw, fb.pitch);
+        } else if (follow >= 0) {
             float pitch_comp = 0.0f;
             if (BALLISTIC_COMP_ENABLE) {
                 const float v = fb.has_bullet_speed ? fb.bullet_speed : BULLET_SPEED_DEFAULT;
@@ -606,14 +622,14 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             char buf[320];
             std::snprintf(buf, sizeof(buf),
                           "%s lock=%d cand=%d dist=%.2f th=%.1f/%.1f | cmd %.1f/%.1f"
-                          " fb %.1f/%.1f v=%.1f dir=%.0f",
+                          " fb %.1f/%.1f v=%.1f dir=%.0f/%.0f",
                           tracker.state_name(), tr.locked ? 1 : 0,
                           static_cast<int>(candidates.size()),
                           tr.index >= 0 ? tr.target.solve.dist : 0.0f,
                           theta_yaw, theta_pitch,
                           gimbal.cmd_yaw, gimbal.cmd_pitch,
                           s.valid ? s.yaw : 0.0f, s.valid ? s.pitch : 0.0f, last_bullet_speed,
-                          gimbal.servo_dir);
+                          gimbal.servo_dir_yaw, gimbal.servo_dir_pitch);
             cv::putText(disp, buf, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7,
                         cv::Scalar(0, 255, 255), 2);
         }

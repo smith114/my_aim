@@ -38,8 +38,9 @@ public:
     float cmd_yaw   = 90.0f;
     float cmd_pitch = 90.0f;
 
-    // 伺服方向, 初值来自 config; 开机自检可翻转
-    float servo_dir = SERVO_DIR;
+    // 伺服方向: **yaw 与 pitch 分开**, 两者实测就是相反的(见 config.hpp 推导)。
+    float servo_dir_yaw   = SERVO_DIR_YAW;
+    float servo_dir_pitch = SERVO_DIR_PITCH;
 
     // 状态
     bool  tracking = false;
@@ -115,8 +116,8 @@ public:
         const float tp = smooth(theta_pitch, sm_pitch_);
 
         // 期望角 = 实测角 + 方向 * 偏差 * 增益 * 软启动系数
-        const float want_yaw   = meas_yaw   + servo_dir * ty * SERVO_GAIN * ramp;
-        const float want_pitch = meas_pitch + servo_dir * tp * SERVO_GAIN * ramp;
+        const float want_yaw   = meas_yaw   + servo_dir_yaw   * ty * SERVO_GAIN * ramp;
+        const float want_pitch = meas_pitch + servo_dir_pitch * tp * SERVO_GAIN * ramp;
 
         // 限幅步进: 每帧最多转 SERVO_MAX_STEP 度, 防大偏差时猛甩
         cmd_yaw   = step_toward(cmd_yaw,   want_yaw,   SERVO_MAX_STEP);
@@ -213,7 +214,7 @@ public:
         if (grew) {
             ++dir_bad_streak_;
             if (dir_bad_streak_ >= 2) {
-                servo_dir = -servo_dir;
+                servo_dir_yaw = -servo_dir_yaw;
                 dir_bad_streak_ = 0;
                 return true;
             }

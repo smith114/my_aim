@@ -22,7 +22,8 @@ static int fails = 0;
 static void prime(GimbalCtrl& g, float yaw, float pitch) {
     // 本测试检验包络/回绕/限位这些**算术**, 与实机伺服符号无关。
     // 固定 +1, 这样 config.hpp 里实机符号改动不会把这里带崩。
-    g.servo_dir = 1.0f;
+    g.servo_dir_yaw = 1.0f;
+    g.servo_dir_pitch = 1.0f;
     for (int i = 0; i < 40; ++i) g.update_feedback(yaw, pitch);
 }
 
