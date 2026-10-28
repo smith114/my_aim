@@ -123,6 +123,25 @@ public:
         const float ty = smooth(theta_yaw, sm_yaw_);
         const float tp = smooth(theta_pitch, sm_pitch_);
 
+        // ---- 发散保护 ----
+        // 符号错时闭环是正反馈: |theta| 会一路上涨, 云台转到限位还在转。
+        // 这里监测"|theta| 是否连续多帧单调变大", 一旦确认就停止推进并报错,
+        // 让操作者看到明确的失败而不是云台自己乱转。
+        const float mag = std::fabs(ty);
+        if (mag > last_mag_ + 0.3f) ++grow_streak_;
+        else if (mag < last_mag_)   grow_streak_ = 0;
+        last_mag_ = mag;
+        if (grow_streak_ >= kDivergeFrames) {
+            if (!diverged_) {
+                std::printf("[GIMBAL][ERR] 偏角连续 %d 帧增大(%.2f->%.2f), 判定为发散,"
+                            " 停止推进。请检查 SERVO_DIR_YAW/PITCH 符号。\n",
+                            grow_streak_, static_cast<double>(last_mag_),
+                            static_cast<double>(mag));
+                diverged_ = true;
+            }
+            return false;   // 不再推进伺服
+        }
+
         // 期望角 = 实测角 + 方向 * 偏差 * 增益 * 软启动系数
         const float want_yaw   = meas_yaw   + servo_dir_yaw   * ty * SERVO_GAIN * ramp;
         const float want_pitch = meas_pitch + servo_dir_pitch * tp * SERVO_GAIN * ramp;
@@ -282,6 +301,10 @@ private:
     int   dir_bad_streak_ = 0;
     int   soft_cnt_ = 0;      // 软启动帧计数
     int   gap_cnt_  = 0;      // 跟踪中断帧数, 超过 kRegapFrames 才真正重置
+    float last_mag_ = 0.0f;   // 上一帧 |theta|, 用于发散检测
+    int   grow_streak_ = 0;   // |theta| 连续增大的帧数
+    bool  diverged_ = false;  // 已判定发散
+    static constexpr int kDivergeFrames = 40;   // 约 0.4~2.5 秒, 看帧率
 
     // 把角度差规整到 (-180, 180], 用于跨 0/360 的比较
     static float wrap_delta(float d) {

@@ -150,7 +150,14 @@ constexpr int   TRACK_REACQUIRE_GAP   = 5;    // 中间连续多少帧无检测�
 // 两个符号都依赖相机安装方向(IMG_DIR)与云台轴向的实际关系。
 // **若换了相机安装角度或改了 IMG_DIR, 这两个符号必须重新实测。**
 constexpr float SERVO_DIR_YAW   = -1.0f;   // **实测确认**(servo_calib): 命令+6度使偏角 0.70->7.31
-constexpr float SERVO_DIR_PITCH = -1.0f;   // 待 servo_calib 实测确认; 暂按与 yaw 同向取 -1
+// pitch 符号由**已确认的物理事实**推出(不是猜):
+//   实测: 云台指向天花板时 pitch=-32.89, 接近机械下限 -35.8
+//     -> pitch 越小 = 抬头, pitch 越大 = 低头
+//   theta_pitch = atan2(tvec.y, tvec.z), 而 OpenCV 相机系 +y 指向图像**下方**
+//     -> theta_pitch > 0 表示目标在光轴**下方**
+//   目标在下方, 光轴要低头才追得上 -> pitch 必须增大
+//     -> SERVO_DIR_PITCH = +1
+constexpr float SERVO_DIR_PITCH =  1.0f;
 
 constexpr float SERVO_GAIN      = 1.0f;   // 偏差角 -> 需要转过的角度 的比例
 constexpr float SERVO_MAX_STEP  = 2.0f;   // 每帧最大转动(度), 防大偏差猛甩
