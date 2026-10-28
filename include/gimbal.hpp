@@ -98,6 +98,14 @@ public:
 
         tracking = true;
 
+        // 中断够久才重新软启动, 否则沿用之前的进度 —— 见 stop_tracking 的说明。
+        if (gap_cnt_ > kRegapFrames) {
+            soft_cnt_ = 0;
+            sm_yaw_   = 0.0f;
+            sm_pitch_ = 0.0f;
+        }
+        gap_cnt_ = 0;
+
         // 软启动: 进跟踪后的前 SERVO_SOFT_START_FRAMES 帧, 增益从 0 线性升到 1。
         // 目的: 切换视觉模式那一瞬间, 如果目标偏角较大, 不要立刻满增益猛拽一下 ——
         // 使用者反馈过"一开自瞄就往一边偏", 除了符号问题, 起手的阶跃感也需要平掉。
@@ -160,12 +168,18 @@ public:
 
     void stop_tracking() {
         tracking = false;
-        // 每次重新进入跟踪都重新软启动, 并清掉低通状态 ——
-        // 否则上次遗留的偏差会被当成这次的初始值, 起手就是一跳。
-        soft_cnt_ = 0;
-        sm_yaw_   = 0.0f;
-        sm_pitch_ = 0.0f;
+        // **不要立刻清软启动计数**。
+        //
+        // 实测(10-28): 下位机的 mode 在刚开自瞄时会 0/1 快速闪烁(每 0.5~1 秒一次),
+        // 加上检测本身逐帧抖动, 如果这里一丢就清零, 软启动永远升不到满增益,
+        // 云台就表现为"几乎不动"。
+        // 改成: 先只累计中断帧数, 真正清状态放到 track() 里按"中断够久"判断。
+        ++gap_cnt_;
     }
+
+    // 中断超过这么多帧才认为真的断了(重新软启动 + 清低通);
+    // 短暂的 mode 闪烁 / 单帧漏检不清状态。
+    static constexpr int kRegapFrames = 25;
 
     float home_yaw   = 0.0f;   // 启动姿态(安全包络中心)
     float home_pitch = 0.0f;
@@ -266,7 +280,8 @@ private:
     float scan_dir_ = 1.0f;
     int   scan_cnt_ = 0;
     int   dir_bad_streak_ = 0;
-    int   soft_cnt_ = 0;      // 软启动帧计数, stop_tracking 时清零
+    int   soft_cnt_ = 0;      // 软启动帧计数
+    int   gap_cnt_  = 0;      // 跟踪中断帧数, 超过 kRegapFrames 才真正重置
 
     // 把角度差规整到 (-180, 180], 用于跨 0/360 的比较
     static float wrap_delta(float d) {
