@@ -43,6 +43,10 @@ public:
     // 运行时可调(可视化界面滑条 / 现场调参)。默认取 config.hpp 的值,
     // 改成成员而不是直接用常量, 否则调参必须重编译 —— 现场没有那个时间。
     float servo_gain        = SERVO_GAIN;
+    // 输出平滑系数与死区, 做成成员以便现场用滑条阻尼抖动。
+    // 静止靶时若 theta 有小幅噪声, 死区能把它压成 0, cmd 就稳住了。
+    float smooth_coef = GIMBAL_SMOOTH;
+    float deadband    = GIMBAL_DEADBAND;
     float aim_offset_yaw    = AIM_YAW_OFFSET_DEG;
     float aim_offset_pitch  = AIM_PITCH_OFFSET_DEG;
     float servo_dir_pitch = SERVO_DIR_PITCH;
@@ -356,9 +360,9 @@ private:
         return clamp_val(v, pitch_lo(), pitch_hi());
     }
     // 低通: 把输入滤波到 state 里, 并在死区内归零
-    static float smooth(float in, float& state) {
-        state = state * (1.0f - GIMBAL_SMOOTH) + in * GIMBAL_SMOOTH;
-        if (std::fabs(state) < GIMBAL_DEADBAND) state = 0.0f;
+    float smooth(float in, float& state) const {
+        state = state * (1.0f - smooth_coef) + in * smooth_coef;
+        if (std::fabs(state) < deadband) state = 0.0f;
         return state;
     }
     static float step_toward(float cur, float want, float max_step) {

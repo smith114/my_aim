@@ -53,6 +53,8 @@ static int tb_gain      = 100;   // /100
 // 每次都重编译部署太慢。滑条拨一下就能看到效果。
 static int tb_dir_yaw   = 0;     // 默认 -1
 static int tb_dir_pitch = 0;     // 默认 -1
+static int tb_smooth    = 35;    // /100, 低通系数
+static int tb_deadband  = 5;     // /10 -> 度
 
 static void row(cv::Mat& m, int& y, const char* k, const std::string& v,
                 const cv::Scalar& col) {
@@ -130,7 +132,7 @@ int main(int argc, char** argv) {
     cv::namedWindow(kW3, cv::WINDOW_NORMAL);
     cv::resizeWindow(kW1, 1100, 800);
     cv::resizeWindow(kW2, 470, 700);
-    cv::resizeWindow(kW3, 420, 340);
+    cv::resizeWindow(kW3, 440, 430);
     cv::createTrackbar("conf x100",      kW3, &tb_conf,      95);
     cv::createTrackbar("enemy 0B 1R 2all", kW3, &tb_enemy,   2);
     cv::createTrackbar("off yaw x10",    kW3, &tb_off_yaw,   100);
@@ -139,6 +141,8 @@ int main(int argc, char** argv) {
     cv::createTrackbar("gain x100",      kW3, &tb_gain,      200);
     cv::createTrackbar("dirYaw 0=-1 1=+1", kW3, &tb_dir_yaw,   1);
     cv::createTrackbar("dirPitch 0=-1 1=+1", kW3, &tb_dir_pitch, 1);
+    cv::createTrackbar("smooth x100",     kW3, &tb_smooth,   100);
+    cv::createTrackbar("deadband x10",    kW3, &tb_deadband, 50);
 
     double last_t = 0.0;
 
@@ -183,6 +187,8 @@ int main(int argc, char** argv) {
 
         gimbal.servo_dir_yaw   = (tb_dir_yaw   == 0) ? -1.0f : 1.0f;
         gimbal.servo_dir_pitch = (tb_dir_pitch == 0) ? -1.0f : 1.0f;
+        gimbal.smooth_coef      = static_cast<float>(tb_smooth) / 100.0f;
+        gimbal.deadband         = static_cast<float>(tb_deadband) / 10.0f;
         gimbal.servo_gain       = static_cast<float>(tb_gain) / 100.0f;
         gimbal.aim_offset_yaw   = static_cast<float>(tb_off_yaw) / 10.0f;
         gimbal.aim_offset_pitch = static_cast<float>(tb_off_pitch) / 10.0f;
@@ -332,6 +338,9 @@ int main(int argc, char** argv) {
         row(pnl, y, "latency", std::to_string(tb_lat_ms) + " ms", OR);
         std::snprintf(b, sizeof(b), "%.2f", static_cast<double>(gimbal.servo_gain));
         row(pnl, y, "gain", b, OR);
+        std::snprintf(b, sizeof(b), "%.2f / %.1f deg", static_cast<double>(gimbal.smooth_coef),
+                      static_cast<double>(gimbal.deadband));
+        row(pnl, y, "smooth/dbz", b, OR);
         std::snprintf(b, sizeof(b), "%+.0f / %+.0f  (dirYaw/dirPitch)",
                       gimbal.servo_dir_yaw, gimbal.servo_dir_pitch);
         row(pnl, y, "servo dir", b, OR);
