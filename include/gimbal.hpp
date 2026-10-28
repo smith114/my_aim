@@ -155,6 +155,7 @@ public:
             sm_pitch_ = 0.0f;
         }
         gap_cnt_ = 0;
+        lost_cnt_ = 0;
 
         // 软启动: 进跟踪后的前 SERVO_SOFT_START_FRAMES 帧, 增益从 0 线性升到 1。
         // 目的: 切换视觉模式那一瞬间, 如果目标偏角较大, 不要立刻满增益猛拽一下 ——
@@ -277,7 +278,11 @@ public:
         // 所以: 朝**冻结的启动姿态**缓慢回, 速率 GIMBAL_RECENTER_DPS。
         // 启动姿态是操作手开自瞄前手动对好的方向, 回到那里最有意义。
         if (have_meas) {
-            if (home_locked_) {
+            ++lost_cnt_;
+            // **短暂丢帧: 原地保持, 不动作**。
+            // 这是关键: 跟踪中偶发掉一两帧(震动/遮挡/曝光)不该改变命令,
+            // 否则命令在"追板"和"回中"之间摆动, 观感就是抬头低头乱晃。
+            if (home_locked_ && lost_cnt_ > kRecenterAfter) {
                 // 沿 yaw 走最短路径, pitch 直接朝目标走
                 float dy = home_frozen_yaw - cmd_yaw;
                 while (dy >  180.0f) dy -= 360.0f;
@@ -421,6 +426,11 @@ private:
     int   dir_bad_streak_ = 0;
     int   soft_cnt_ = 0;      // 软启动帧计数
     int   gap_cnt_  = 0;      // 跟踪中断帧数, 超过 kRegapFrames 才真正重置
+    // 连续"没有目标"的帧数。只有它超过 kRecenterAfter 才允许回中。
+    // 实测教训(10-28): 开火震动让检测断续丢帧, 而原来**丢一帧就回中**,
+    // 于是云台在"追板"和"回中"之间来回, 表现为抬头低头乱摆。
+    int   lost_cnt_ = 0;
+    static constexpr int kRecenterAfter = 60;   // 约 1 秒(60fps)才认为真的没目标
     float last_mag_ = 0.0f;   // 上一帧 |theta|, 用于发散检测
     int   grow_streak_ = 0;   // |theta| 连续增大的帧数
     bool  diverged_ = false;  // 已判定发散
