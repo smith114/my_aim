@@ -296,12 +296,26 @@ inline void draw_debug(cv::Mat& frame, const std::vector<LightBar>& bars,
     for (const auto& lb : bars) {
         cv::Point2f p[4];
         lb.rr.points(p);
+        // 灯条框按**判定出来的颜色**上色: 蓝灯条画蓝框, 红灯条画红框。
+        // 顺手在框边标字母 B/R —— 截图压缩、投影仪偏色时颜色可能看不准,
+        // 但字母不会歧义。
         const cv::Scalar col = (lb.color == 0) ? cv::Scalar(255, 0, 0) : cv::Scalar(0, 0, 255);
         for (int i = 0; i < 4; ++i) cv::line(frame, p[i], p[(i + 1) % 4], col, 1);
+        cv::putText(frame, lb.color == 0 ? "B" : "R",
+                    lb.center + cv::Point2f(-4.0f, -lb.length * 0.5f - 3.0f),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.45, col, 1);
     }
+    // 装甲板框改用**绿色**, 不再用黄色。
+    // 原来画黄色, 结果"配成的一块板"看起来像"把蓝色灯条误判成了橙黄色", 极易误读
+    // (实际使用者反馈过一次)。绿框 + 蓝/红灯条框, 三色互不混淆;
+    // 框内再写 BLUE/RED, 直接读出判定结果。
     for (const auto& ar : armors) {
+        const cv::Scalar box_col(0, 255, 0);
         for (int i = 0; i < 4; ++i)
-            cv::line(frame, ar.pts[i], ar.pts[(i + 1) % 4], cv::Scalar(0, 255, 255), 2);
+            cv::line(frame, ar.pts[i], ar.pts[(i + 1) % 4], box_col, 2);
+        cv::putText(frame, ar.color == 0 ? "BLUE" : "RED",
+                    ar.center + cv::Point2f(-18.0f, 5.0f),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5, box_col, 1);
     }
 }
 

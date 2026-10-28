@@ -24,6 +24,13 @@
 #include "armor.hpp"
 #include "config.hpp"
 #include "hik_camera.hpp"
+
+#ifdef HAVE_OPENVINO
+#include <memory>
+
+#include "yolo_armor.hpp"
+#include "yolo_detector.hpp"
+#endif
 #include "protocol.hpp"
 #include "solver.hpp"
 
@@ -37,6 +44,19 @@ static void apply_img_dir(cv::Mat& f) {
         default: break;
     }
 }
+
+#ifdef HAVE_OPENVINO
+static std::unique_ptr<srm::YoloDetector> g_yolo;
+#endif
+static int g_want_color = -1;
+static const bool g_want_color_used = (void(g_want_color), true);
+
+// 两个分支都能取"检测到的框数", 供 HUD/日志使用
+#ifdef HAVE_OPENVINO
+#define BOXCOUNT static_cast<int>(boxes.size())
+#else
+#define BOXCOUNT boxes_size
+#endif
 
 int main(int argc, char** argv) {
     bool headless = false;
@@ -100,6 +120,21 @@ int main(int argc, char** argv) {
     }
 
     // ---------------------------------------------------------- 相机
+    // 初始化 YOLO（与 my_aim 同一套检测器，含布局校验）。
+    // 加载失败直接退出：宁可明确报错，也不要让人以为在看 YOLO 结果而实际没有。
+    #ifdef HAVE_OPENVINO
+    try {
+        g_yolo = std::make_unique<srm::YoloDetector>(
+            srm::make_yolo_profile(YOLO_PROFILE_SELECT),
+            srm::YOLO_CONF_THRESH, srm::YOLO_NMS_THRESH);
+    } catch (const std::exception& e) {
+        std::cerr << "[YOLO][ERR] 模型加载失败: " << e.what() << "\n";
+        return 1;
+    }
+    #else
+    std::cerr << "[YOLO][ERR] 本 build 未编入 OpenVINO，无法检测\n";
+    return 1;
+    #endif
     HikCamera cam;
     if (!bayer_arg.empty()) cam.set_bayer(HikCamera::bayer_from_name(bayer_arg));
     if (!cam.open()) {
@@ -168,7 +203,7 @@ int main(int argc, char** argv) {
                             bars_n = static_cast<int>(bs.size());
                         }
                     }
-                    std::printf("[SEEK] pitch=%7.1f off=%+7.1f yaw=%8.2f bars=%d armor=%d "
+                    std::printf("[SEEK] pitch=%7.1f off=%+7.1f yaw=%8.2f yolo=%d armor=%d "
                                 "V=%.0f\n",
                                 ptest, off, yaw, bars_n, armor_n, vmean);
                     std::fflush(stdout);
@@ -227,13 +262,45 @@ int main(int argc, char** argv) {
         if (!raw) apply_img_dir(frame);
         ++frame_cnt;
 
-        // 检测
-        const auto bars = extract_lightbars(frame);
-        const auto armors = match_armors(bars, hsv_value_channel(frame));
+        // 检测: 用 **YOLO**, 与 my_aim 完全一致。
+        // 之前这里还是灯条法, 结果"窗口里看到的"和"主程序实际跑的"不是一套检测,
+        // 看着能检出但跑 my_aim 没反应, 或者反过来 —— 这种不一致非常误导。
+        std::vector<LightBar> bars;
+        std::vector<Armor>    armors;
+#ifdef HAVE_OPENVINO
+        // boxes 只在编入 OpenVINO 时存在; 没编入时程序已经在启动阶段退出,
+        // 这里只是为了让 else 分支也能通过编译。
+        std::vector<YoloBox> boxes;
+        if (g_yolo) {
+            boxes  = g_yolo->detect(frame);
+            armors = filter_by_color(yolo_to_armors(boxes), g_want_color);
+        }
+#else
+        const int boxes_size = 0;   // 占位, 仅供下面日志宏取用
+#endif
 
         // 标注
         disp = frame.clone();
-        if (show_bars) draw_debug(disp, bars, armors);
+        // 灯条框已不参与检测, 但 YOLO 的框仍然画出来(带颜色/分数),
+        // 这样一眼能看出模型判成蓝还是红、置信度多少。
+        if (show_bars) {
+            draw_debug(disp, bars, armors);
+#ifdef HAVE_OPENVINO
+            for (const auto& b : boxes) {
+                const cv::Scalar col = yolo_color_of(b) == 0 ? cv::Scalar(255, 0, 0)
+                                                             : cv::Scalar(0, 0, 255);
+                cv::rectangle(disp, b.rect, col, 2);
+                char t[96];
+                std::snprintf(t, sizeof(t), "%s %.2f",
+                              b.name.empty() ? "?" : b.name.c_str(),
+                              static_cast<double>(b.score));
+                cv::putText(disp, t, b.rect.tl() + cv::Point(0, -6),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.6, col, 2);
+                for (const auto& c : b.corners)
+                    cv::circle(disp, c, 4, cv::Scalar(0, 0, 255), -1);
+            }
+#endif
+        }
         for (size_t i = 0; i < armors.size(); ++i) {
             const SolveResult r = solve_pnp(armors[i].pts);
             if (!r.ok) continue;
@@ -246,8 +313,8 @@ int main(int argc, char** argv) {
             const cv::Scalar mv = cv::mean(hsv_value_channel(frame));
             char hud[256];
             std::snprintf(hud, sizeof(hud),
-                          "f=%d bars=%d armor=%d  V_mean=%.0f  bayer=%s  %s",
-                          frame_cnt, static_cast<int>(bars.size()),
+                          "f=%d yolo=%d armor=%d  V_mean=%.0f  bayer=%s  %s",
+                          frame_cnt, BOXCOUNT,
                           static_cast<int>(armors.size()), mv[0], cam.bayer_name(),
                           raw ? "RAW" : "IMG_DIR");
             cv::putText(disp, hud, cv::Point(12, 32), cv::FONT_HERSHEY_SIMPLEX, 0.75,
@@ -259,8 +326,7 @@ int main(int argc, char** argv) {
             char p[256];
             std::snprintf(p, sizeof(p), "%s/view_%04d.jpg", out_dir.c_str(), saved++);
             cv::imwrite(p, disp);
-            std::printf("[SNAP] %s  bars=%d armor=%d\n", p, static_cast<int>(bars.size()),
-                        static_cast<int>(armors.size()));
+            std::printf("[SNAP] %s  yolo=%d armor=%d\n", p, BOXCOUNT, static_cast<int>(armors.size()));
         }
 
         if (have_serial) {
@@ -285,8 +351,8 @@ int main(int argc, char** argv) {
 
         if (headless && frame_cnt % 60 == 0) {
             const cv::Scalar mv = cv::mean(hsv_value_channel(frame));
-            std::printf("[RUN] f=%d bars=%d armor=%d V_mean=%.0f\n", frame_cnt,
-                        static_cast<int>(bars.size()), static_cast<int>(armors.size()), mv[0]);
+            std::printf("[RUN] f=%d yolo=%d armor=%d V_mean=%.0f\n", frame_cnt,
+                        BOXCOUNT, static_cast<int>(armors.size()), mv[0]);
             std::fflush(stdout);
         }
         if (max_frames > 0 && frame_cnt >= max_frames) break;
