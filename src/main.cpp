@@ -20,6 +20,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <string>
 #include <ctime>
 #include <iostream>
 #include <string>
@@ -352,6 +354,46 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
     kf_pitch.reset();
     double kf_last_t = now_s();
     // 现场用 --dir-yaw / --dir-pitch 覆盖符号, 不用重编译
+    // ******** 加载 aim_gui 保存的现场参数 ********
+    //
+    // 脱节问题(10-28): 操作手在 aim_gui 里用滑条把方向/增益/偏移调好并按 s 保存,
+    // 但 my_aim 只读 config.hpp —— 于是"调好的值"从来没进到真正开火的程序里,
+    // 两边各说各话。这里让主程序读同一个文件, 调好即生效。
+    //
+    // 优先级: 命令行 > aim_gui.cfg > config.hpp
+    {
+        std::ifstream cf("aim_gui.cfg");
+        if (cf) {
+            std::string line;
+            int applied = 0;
+            while (std::getline(cf, line)) {
+                const auto eq = line.find('=');
+                if (eq == std::string::npos) continue;
+                const std::string k = line.substr(0, eq);
+                const int v = std::atoi(line.c_str() + eq + 1);
+                if      (k == "dir_yaw")    { gimbal.servo_dir_yaw   = (v == 0) ? -1.0f : 1.0f; ++applied; }
+                else if (k == "dir_pitch")  { gimbal.servo_dir_pitch = (v == 0) ? -1.0f : 1.0f; ++applied; }
+                else if (k == "gain")       { gimbal.servo_gain      = static_cast<float>(v) / 100.0f; ++applied; }
+                else if (k == "off_yaw")    { gimbal.aim_offset_yaw   = static_cast<float>(v) / 10.0f; ++applied; }
+                else if (k == "off_pitch")  { gimbal.aim_offset_pitch = static_cast<float>(v) / 10.0f; ++applied; }
+                else if (k == "smooth")     { gimbal.smooth_coef     = static_cast<float>(v) / 100.0f; ++applied; }
+                else if (k == "deadband")   { gimbal.deadband        = static_cast<float>(v) / 10.0f; ++applied; }
+                else if (k == "meas_lp")    { gimbal.meas_lp_coef    = static_cast<float>(v) / 100.0f; ++applied; }
+                else if (k == "enemy")      { want_color = (v == 2) ? -1 : (v == 1 ? 1 : 0); ++applied; }
+                else if (k == "conf")       { /* 检测器已构造, 见下 */ ++applied; }
+            }
+            if (applied > 0) {
+                LOG("[CFG] 已加载 aim_gui.cfg (%d 项): dir=%+.0f/%+.0f gain=%.2f "
+                    "off=%.1f/%.1f smooth=%.2f dbz=%.1f measLP=%.2f\n",
+                    applied,
+                    gimbal.servo_dir_yaw, gimbal.servo_dir_pitch,
+                    gimbal.servo_gain,
+                    gimbal.aim_offset_yaw, gimbal.aim_offset_pitch,
+                    gimbal.smooth_coef, gimbal.deadband, gimbal.meas_lp_coef);
+            }
+        }
+    }
+
     if (cli_dir_yaw   != 0.0f) gimbal.servo_dir_yaw   = (cli_dir_yaw   > 0 ? 1.0f : -1.0f);
     if (cli_dir_pitch != 0.0f) gimbal.servo_dir_pitch = (cli_dir_pitch > 0 ? 1.0f : -1.0f);
     LOG("[SERVO] 方向符号 yaw=%+.0f pitch=%+.0f%s\n",
@@ -645,6 +687,10 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 LOG("[WARN] 回传数据过期(%.3fs), 云台冻结\n", fb.age());
             }
         } else {
+            // 无目标时清零偏角, 否则日志会打出上一帧的陈旧值(实测见过 th=-16.1
+            // 出现在 armor=0.0 的行上, 读日志的人会以为当时有 16 度的偏差)。
+            theta_yaw   = 0.0f;
+            theta_pitch = 0.0f;
             gimbal.stop_tracking();
             // 丢锁就重置滤波器: 否则旧的角速度估计会污染下一个目标
             if (KF_ENABLE) { kf_yaw.reset(); kf_pitch.reset(); }

@@ -201,7 +201,18 @@ constexpr float SERVO_DIR_YAW   = -1.0f;   // **实测确认**: servo_calib 偏�
 //     -> SERVO_DIR_PITCH = +1
 // **已由 servo_calib 实测确认**: 往 +1 方向转使偏角 2.54 -> 0.50。
 // 与上面从"天花板 pitch=-32.89"推出来的一致, 两条独立路径互相印证。
-constexpr float SERVO_DIR_PITCH = -1.0f;   // **操作手实测**(10-28):
+// ******** 必须是 +1 (现场日志铁证, 10-28) ********
+//
+// 实测日志: pitch = +18.3, th_pitch = -16.1 (目标在光轴上方 16 度)
+//   DIR = -1: cmd = 18.3 + 16.1 = 34.4 -> 被行程上限 24.1 夹住
+//             -> 云台顶死在下方, 目标出画, 表现为"像被限制住, 回不来"
+//   DIR = +1: cmd = 18.3 - 16.1 =  2.2 -> pitch 减小 -> 抬头 -> 追向目标 ✓
+//
+// 与"云台指向天花板时 pitch=-32.89"(负 pitch = 抬头)一致:
+// 目标在上方时 theta_pitch < 0, 要减小 pitch, 所以 DIR 必须是 +1。
+// 这条和 SERVO_DIR_YAW 相反 —— 两轴不同号是对的, 因为"命令增大"对两轴
+// 意味着相反的物理动作( yaw 增大向左, pitch 增大向下 )。
+constexpr float SERVO_DIR_PITCH =  1.0f;
 //     yaw 增大 -> 镜头**向左**,  pitch 增大 -> 镜头**向上**
 //   theta_yaw>0 = 目标在右  -> 要往右转 -> yaw 必须减小 -> YAW = -1
 //   theta_pitch>0 = 目标在下 -> 要低头   -> pitch 必须减小 -> PITCH = -1
