@@ -133,6 +133,18 @@ else()
   message(STATUS "YOLO 检测: my_aim 未编入 (没找到 OpenVINO)")
 endif()
 
+# ---------------------------------------------------------------- 伺服方向自动标定
+# 实机上自动测出 SERVO_DIR_YAW / SERVO_DIR_PITCH, 不靠猜。
+# 判据: 锁住目标后把命令角挪一小步, 看 |theta| 变小还是变大。
+add_executable(servo_calib src/servo_calib.cpp)
+aim_link(servo_calib)
+if(OpenVINO_FOUND)
+  target_compile_definitions(servo_calib PRIVATE HAVE_OPENVINO=1)
+  target_link_libraries(servo_calib PRIVATE openvino::runtime)
+else()
+  message(WARNING "servo_calib 需要 OpenVINO, 未编入")
+endif()
+
 # ---------------------------------------------------------------- 标定工具
 add_executable(calibrate src/calibrate.cpp)
 aim_link(calibrate)
