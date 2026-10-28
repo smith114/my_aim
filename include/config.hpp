@@ -204,6 +204,11 @@ constexpr float GIMBAL_ENVELOPE_DEG = 30.0f;
 // 否则云台会在错误的高度上被限制住。测法: gimbal_test --sweep ±pitch --stop N
 constexpr float GIMBAL_YAW_MIN   = 0.0f;
 constexpr float GIMBAL_YAW_MAX   = 360.0f;   // >= 359 视为整圈(wrap)
+// **留安全余量**: 命令角不要贴着行程末端发。
+// 实测教训(10-28): 发散把 pitch 推到 +26.02(上限 26.1)后, 电机堵转,
+// 之后连反向命令(-20度)都不再响应, 只能断电重启。
+// 所以命令角一律限制在 [MIN+MARGIN, MAX-MARGIN] 之内, 永不贴边。
+constexpr float GIMBAL_PITCH_MARGIN = 2.0f;
 constexpr float GIMBAL_PITCH_MIN = -35.8f;   // 实测机械下限
 constexpr float GIMBAL_PITCH_MAX =  26.1f;   // 实测机械上限
 

@@ -227,7 +227,7 @@ public:
         const float dp = cmd_pitch - home_pitch;
         if (dp >  GIMBAL_ENVELOPE_DEG) cmd_pitch = home_pitch + GIMBAL_ENVELOPE_DEG;
         if (dp < -GIMBAL_ENVELOPE_DEG) cmd_pitch = home_pitch - GIMBAL_ENVELOPE_DEG;
-        cmd_pitch = clamp_val(cmd_pitch, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
+        cmd_pitch = clamp_val(cmd_pitch, pitch_lo(), pitch_hi());
     }
 
     // 查询/调试用: 直接给一个绝对命令角(绕过包络, 供 gimbal_test 工具使用)
@@ -270,6 +270,10 @@ private:
         if (GIMBAL_YAW_MAX - GIMBAL_YAW_MIN >= 359.0f) return wrap360(v);
         return clamp_val(v, GIMBAL_YAW_MIN, GIMBAL_YAW_MAX);
     }
+    // 带安全余量的 pitch 上下限: 绝不把命令角发到贴边, 避免堵转卡死。
+    float pitch_lo() const { return GIMBAL_PITCH_MIN + GIMBAL_PITCH_MARGIN; }
+    float pitch_hi() const { return GIMBAL_PITCH_MAX - GIMBAL_PITCH_MARGIN; }
+
     // pitch **永远 clamp, 永不 wrap**。
     //
     // 原来这里和 yaw 一样按"跨度 >= 359 就 wrap"判断, 而配置里 pitch 正好是
@@ -277,7 +281,7 @@ private:
     // 下位机据此把云台顶到最高处。pitch 是机械限位轴, 回绕在物理上就没有意义,
     // 所以这里无条件 clamp, 不设 wrap 分支。
     float wrap_or_clamp_pitch(float v) const {
-        return clamp_val(v, GIMBAL_PITCH_MIN, GIMBAL_PITCH_MAX);
+        return clamp_val(v, pitch_lo(), pitch_hi());
     }
     // 低通: 把输入滤波到 state 里, 并在死区内归零
     static float smooth(float in, float& state) {
