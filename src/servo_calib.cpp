@@ -109,10 +109,12 @@ static bool wait_aim_mode(Ctx& c, int seconds) {
 
 int main(int argc, char** argv) {
     float step_deg  = 6.0f;
+    float pstep_deg = 3.0f;   // pitch 行程短, 步长小一半
     int   settle    = 25;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--step") && i + 1 < argc)        step_deg = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--settle") && i + 1 < argc) settle   = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--pstep") && i + 1 < argc)  pstep_deg = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "-h") || !std::strcmp(argv[i], "--help")) {
             std::printf("用法: servo_calib [--step DEG] [--settle N]\n"
                         "  实机自动测 yaw/pitch 的伺服方向符号。\n"
@@ -159,55 +161,71 @@ int main(int argc, char** argv) {
     // 保持角: 用实测角作为命令基准(绝对角), 挪一步后停住等待稳定
     auto probe_axis = [&](bool is_yaw, float sign) -> float {
         char cmd_y = meas_yaw0, cmd_p = meas_pitch0;
-        if (is_yaw) cmd_y += sign * step_deg;
-        else        cmd_p += sign * step_deg;
+        const float st = is_yaw ? step_deg : pstep_deg;
+        if (is_yaw) cmd_y += sign * st;
+        else        cmd_p += sign * st;
+
+        // 先把云台摆到目标命令角
         c.link.set_target(cmd_y, cmd_p, 0);
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         for (int i = 0; i < settle; ++i) {
             c.link.set_target(cmd_y, cmd_p, 0);
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
         }
-        // 读稳定后的偏角
         float ty, tp, dd;
-        if (!sample_theta(c, 12, ty, tp, dd)) return 1e9f;
+        const bool ok = sample_theta(c, 12, ty, tp, dd);
+        // 无论成功与否都把云台放回基准, 否则下一次测量被污染
+        c.link.set_target(meas_yaw0, meas_pitch0, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        if (!ok) return -1.0f;                 // 丢目标
         return is_yaw ? std::fabs(ty) : std::fabs(tp);
     };
 
-    // yaw: 先试 +step。|theta| 变小说明 +方向对
-    std::printf("\n--- 测 yaw: 命令 +%.1f 度 ---\n", (double)step_deg);
-    const float yaw_after_plus = probe_axis(true, +1.0f);
-    // 回到基准
-    c.link.set_target(meas_yaw0, meas_pitch0, 0);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    // 一个轴: 两个方向都试, 返回 {符号, 该方向下的 |theta|}
+    auto probe_axis_both = [&](bool is_yaw) -> std::pair<int, float> {
+        const float base = is_yaw ? std::fabs(ty0) : std::fabs(tp0);
+        std::pair<int, float> best{0, -1.0f};
+        for (int sgn : {+1, -1}) {
+            std::printf("    试方向 %+d ...\n", sgn);
+            const float a = probe_axis(is_yaw, static_cast<float>(sgn));
+            if (a < 0.0f) {
+                std::printf("      丢目标, 换方向\n");
+                continue;
+            }
+            std::printf("      |theta| = %.2f (基准 %.2f)\n", (double)a, (double)base);
+            if (a < base - 0.5f) return {sgn, a};   // 明确改善, 直接采纳
+            if (best.first == 0 || a < best.second) best = {sgn, a};
+        }
+        return best;
+    };
 
-    std::printf("\n--- 测 pitch: 命令 +%.1f 度 ---\n", (double)step_deg);
-    const float pitch_after_plus = probe_axis(false, +1.0f);
-    c.link.set_target(meas_yaw0, meas_pitch0, 0);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    std::printf("\n--- 测 yaw (步长 %.1f 度) ---\n", (double)step_deg);
+    auto ry = probe_axis_both(true);
+    std::printf("\n--- 测 pitch (步长 %.1f 度) ---\n", (double)pstep_deg);
+    auto rp = probe_axis_both(false);
 
     const float base_yaw   = std::fabs(ty0);
     const float base_pitch = std::fabs(tp0);
 
     std::printf("\n================= 结果 =================\n");
     std::printf("  基准 |th|    yaw=%.2f   pitch=%.2f\n", (double)base_yaw, (double)base_pitch);
-    std::printf("  命令+后 |th| yaw=%.2f   pitch=%.2f\n",
-                (double)yaw_after_plus, (double)pitch_after_plus);
+    std::printf("  测量后   |th| yaw=%.2f (方向%+d)   pitch=%.2f (方向%+d)\n",
+                (double)ry.second, ry.first, (double)rp.second, rp.first);
 
-    auto verdict = [](const char* axis, float b, float a) {
-        if (!std::isfinite(a) || a > 1e8f) {
-            std::printf("  %-5s : 测不出来(挪动后丢目标)\n", axis);
+    auto verdict2 = [&](const char* axis, float b, std::pair<int, float> r) {
+        if (r.first == 0 || r.second < 0.0f) {
+            std::printf("  %-5s : 测不出来(两个方向都丢目标或变化太小)\n", axis);
             return;
         }
-        if (a < b - 0.5f) {
-            std::printf("  %-5s : SERVO_DIR = +1  (命令增大使偏角变小)\n", axis);
-        } else if (a > b + 0.5f) {
-            std::printf("  %-5s : SERVO_DIR = -1  (命令增大使偏角变大)\n", axis);
-        } else {
-            std::printf("  %-5s : 分辨不出(变化 %.2f 度, 太小)\n", axis, (double)(a - b));
-        }
+        if (r.second < b - 0.5f)
+            std::printf("  %-5s : SERVO_DIR = %+d  (往该方向转使偏角从 %.2f 缩小到 %.2f)\n",
+                        axis, r.first, (double)b, (double)r.second);
+        else
+            std::printf("  %-5s : 两个方向都没改善(基准 %.2f, 最好 %.2f) -> 该轴可能没用或受限位影响\n",
+                        axis, (double)b, (double)r.second);
     };
-    verdict("yaw",   base_yaw,   yaw_after_plus);
-    verdict("pitch", base_pitch, pitch_after_plus);
+    verdict2("yaw",   base_yaw,   ry);
+    verdict2("pitch", base_pitch, rp);
     std::printf("========================================\n");
     std::printf("把上面两行结果写进 config.hpp 的 SERVO_DIR_YAW / SERVO_DIR_PITCH,\n");
     std::printf("或者直接用 --dir-yaw / --dir-pitch 在命令行指定。\n");

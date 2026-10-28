@@ -149,8 +149,8 @@ constexpr int   TRACK_REACQUIRE_GAP   = 5;    // 中间连续多少帧无检测�
 //
 // 两个符号都依赖相机安装方向(IMG_DIR)与云台轴向的实际关系。
 // **若换了相机安装角度或改了 IMG_DIR, 这两个符号必须重新实测。**
-constexpr float SERVO_DIR_YAW   = -1.0f;   // 增大 yaw 命令 -> 光轴左转
-constexpr float SERVO_DIR_PITCH =  1.0f;   // 增大 pitch 命令 -> 光轴低头
+constexpr float SERVO_DIR_YAW   = -1.0f;   // **实测确认**(servo_calib): 命令+6度使偏角 0.70->7.31
+constexpr float SERVO_DIR_PITCH = -1.0f;   // 待 servo_calib 实测确认; 暂按与 yaw 同向取 -1
 
 constexpr float SERVO_GAIN      = 1.0f;   // 偏差角 -> 需要转过的角度 的比例
 constexpr float SERVO_MAX_STEP  = 2.0f;   // 每帧最大转动(度), 防大偏差猛甩
