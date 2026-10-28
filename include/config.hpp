@@ -123,7 +123,10 @@ constexpr int   MAX_LOST_FRAMES       = 30;   // 丢失保持帧数
 // 实测用 3 时, 检测逐帧抖动会让"连续 3 帧同一位置"很难满足, 结果一直不锁定,
 // 主程序误以为没目标而去摆扫, 反而把目标转出画面。取 2 明显更容易咬住。
 constexpr int   TRACK_CONFIRM_FRAMES  = 2;
-constexpr float TRACK_ASSOC_PX        = 120.0f;// 帧间关联门限 px
+// 帧间关联门限。原来 120px 太松: 装甲板旁边 100px 的顶灯会被当成"同一块板"关联上,
+// 于是跟踪器就跟着灯跑了。60px 在 1440 宽画面、5m 处(板约 43px)是合理范围:
+// 目标单帧真实位移远小于这个数, 而误检相距通常超过它。
+constexpr float TRACK_ASSOC_PX        = 60.0f;
 constexpr int   TRACK_REACQUIRE_GAP   = 5;    // 中间连续多少帧无检测才允许重新确认
 
 // ============================================================ 云台控制
@@ -354,7 +357,10 @@ constexpr float CALIB_SQUARE_MM = 30.0f;
 //   蓝板(暗、仅 LED 自发光) 只有 0.32 -> 0.4 会漏
 // 比赛场地正是"暗背景 + LED 自发光", 所以按 0.3 定阈。
 // 误检由 NMS 和下游 PnP 有效性(0.4~8m / 偏角<60°)兜底。
-constexpr float YOLO_CONF_THRESH = 0.30f;
+// 0.30 太低: 实测顶灯/金属反光这种弱误检正好能过阈值, 然后被跟踪器锁上。
+// 0.45 是"宁可漏一帧, 不要锁错目标"的取舍 —— 漏检下一帧还能补,
+// 锁错会把云台带到无关方向去。
+constexpr float YOLO_CONF_THRESH = 0.45f;
 constexpr float YOLO_NMS_THRESH  = 0.30f;
 
 }  // namespace srm

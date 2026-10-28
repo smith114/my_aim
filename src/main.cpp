@@ -136,7 +136,10 @@ bool hold_only      = false;   // --hold: 只保持姿态, 不推进伺服
 // 0 表示"不覆盖, 用 config.hpp 的值"。
 float cli_dir_yaw   = 0.0f;
 float cli_dir_pitch = 0.0f;
-int  want_color     = -1;      // 颜色过滤: -1=不过滤 0=只蓝 1=只红
+// 颜色过滤: -1=不过滤 0=只蓝 1=只红
+    // **默认为 0(只蓝)**: 我们打蓝方。之前默认 -1(不过滤) 是错的 ——
+    // 顶灯常是白色/青白, 不过滤就会被 YOLO 当装甲板, 再被跟踪器锁上。
+    int  want_color     = 0;
 int  yolo_profile_sel = YOLO_PROFILE_SELECT;   // 见 config.hpp, 当前默认 v11
 float yolo_conf     = YOLO_CONF_THRESH;
 int   stat_yolo_boxes = 0;
@@ -265,7 +268,7 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         "            请在装了 OpenVINO 的机器上重新 cmake 配置并编译。\n");
     (void)use_yolo;
     return 1;
-    (void)want_color;
+    
     (void)yolo_conf;
     (void)stat_yolo_boxes;
 #endif

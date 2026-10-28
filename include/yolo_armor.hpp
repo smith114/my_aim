@@ -113,6 +113,17 @@ inline std::vector<Armor> yolo_to_armors(const std::vector<YoloBox>& boxes) {
         if (b.corners.size() != 4) continue;
         const Armor ar = yolo_to_armor(b);
         if (ar.width < 3.0f || ar.height < 3.0f) continue;
+
+        // ---- 几何校验: 装甲板是 140x125mm, 长宽比约 1.12 ----
+        // 顶灯/反光是任意形状的亮斑, 长宽比经常远离这个范围。
+        // 放宽到 [0.45, 2.6] 是为了容忍透视压缩和局部遮挡,
+        // 但足以排除细长光带和方形灯罩。
+        {
+            const float asp = ar.width / ar.height;
+            if (!(asp > 0.45f && asp < 2.6f)) continue;
+            // 面积下限: 太小的亮斑(远处反光)不算装甲板
+            if (ar.width * ar.height < 100.0f) continue;
+        }
         out.push_back(ar);
     }
     return out;
