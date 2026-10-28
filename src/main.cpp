@@ -33,6 +33,7 @@
 #include "config.hpp"
 #include "gimbal.hpp"
 #include "hik_camera.hpp"
+#include "kf.hpp"
 #include "protocol.hpp"
 #include "solver.hpp"
 #include "synth.hpp"
@@ -333,6 +334,12 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
     // ---------------------------------------------------------- 状态
     Tracker    tracker;
     GimbalCtrl gimbal;
+    // 延迟补偿: yaw / pitch 各一套, 互相独立
+    AngleKF kf_yaw(KF_Q_ANGLE, KF_Q_RATE, KF_R_ANGLE);
+    AngleKF kf_pitch(KF_Q_ANGLE, KF_Q_RATE, KF_R_ANGLE);
+    kf_yaw.reset();
+    kf_pitch.reset();
+    double kf_last_t = now_s();
     // 现场用 --dir-yaw / --dir-pitch 覆盖符号, 不用重编译
     if (cli_dir_yaw   != 0.0f) gimbal.servo_dir_yaw   = (cli_dir_yaw   > 0 ? 1.0f : -1.0f);
     if (cli_dir_pitch != 0.0f) gimbal.servo_dir_pitch = (cli_dir_pitch > 0 ? 1.0f : -1.0f);
@@ -486,6 +493,13 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         }
         stat_solved += static_cast<int>(candidates.size());
 
+        // ------------------------------------------------ 延迟补偿
+        // 每帧: 先 predict(dt), 再用当前测量 update(), 最后外推 KF_LATENCY_S。
+        // 丢锁时重置 —— 否则上一段轨迹的角速度会被带到新目标上。
+        const double kf_now = now_s();
+        const float  kf_dt  = static_cast<float>(std::min(kf_now - kf_last_t, 0.2));
+        kf_last_t = kf_now;
+
         // ------------------------------------------------ 跟踪
         const TrackResult tr = tracker.update(candidates);
         if (!candidates.empty()) last_candidate_frame = frame_cnt;
@@ -591,8 +605,20 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 const float v = fb.has_bullet_speed ? fb.bullet_speed : BULLET_SPEED_DEFAULT;
                 pitch_comp = ballistic_pitch_deg(candidates[follow].solve.dist, v);
             }
-            theta_yaw   = candidates[follow].solve.yaw;
-            theta_pitch = candidates[follow].solve.pitch + pitch_comp;
+            // 原始测量 -> KF -> 外推
+            const float raw_yaw   = candidates[follow].solve.yaw;
+            const float raw_pitch = candidates[follow].solve.pitch + pitch_comp;
+            if (KF_ENABLE) {
+                kf_yaw.predict(kf_dt);
+                kf_pitch.predict(kf_dt);
+                kf_yaw.update(raw_yaw);
+                kf_pitch.update(raw_pitch);
+                theta_yaw   = kf_yaw.predict_ahead(KF_LATENCY_S);
+                theta_pitch = kf_pitch.predict_ahead(KF_LATENCY_S);
+            } else {
+                theta_yaw   = raw_yaw;
+                theta_pitch = raw_pitch;
+            }
             if (fb_fresh && vision_on) {
                 gimbal.track(theta_yaw, theta_pitch);
                 if (tr.locked) last_locked_frame = frame_cnt;
@@ -608,6 +634,8 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             }
         } else {
             gimbal.stop_tracking();
+            // 丢锁就重置滤波器: 否则旧的角速度估计会污染下一个目标
+            if (KF_ENABLE) { kf_yaw.reset(); kf_pitch.reset(); }
             // 没有候选时的行为。
             //
             // 默认 **原地保持**, 不摆扫 —— 理由见 config.hpp 的 ENABLE_AUTO_SCAN:

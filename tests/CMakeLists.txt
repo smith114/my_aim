@@ -8,6 +8,9 @@ set(TEST_TARGETS
   test_tracker
   test_closed_loop
   gimbal_edge
+  test_kf
+  test_kf3d
+  test_spin_ekf
 )
 
 foreach(t ${TEST_TARGETS})

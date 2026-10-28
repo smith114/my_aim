@@ -20,6 +20,8 @@ namespace srm {
 
 // 相机系下的一次解算结果
 struct SolveResult {
+    // 目标中心在相机系的三维位置(mm) —— 给 3D 卡尔曼用
+    float px = 0.0f, py = 0.0f, pz = 0.0f;
     bool  ok    = false;
     float dist  = 0.0f;   // 目标到相机光心距离, 米
     float yaw   = 0.0f;   // 相机系 yaw 偏差角, 度 (+ = 目标偏右)
@@ -109,6 +111,9 @@ inline SolveResult solve_pnp(const std::vector<cv::Point2f>& img_pts) {
     const double z = pr.tvec.at<double>(2);
     if (z <= 1.0) return out;   // 目标在光轴后方或贴脸, 判为无效
 
+    out.px    = static_cast<float>(x);
+    out.py    = static_cast<float>(y);
+    out.pz    = static_cast<float>(z);
     out.dist  = static_cast<float>(std::sqrt(x * x + y * y + z * z) / 1000.0);
     out.yaw   = static_cast<float>(std::atan2(x, z) * 180.0 / CV_PI);
     out.pitch = static_cast<float>(std::atan2(y, z) * 180.0 / CV_PI);

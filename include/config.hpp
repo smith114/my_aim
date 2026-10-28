@@ -166,6 +166,20 @@ constexpr float SERVO_DIR_PITCH = -1.0f;   // **操作手实测**(10-28):
 // 注意: 两轴都是 -1。之前 pitch 取 +1 导致目标在下方时镜头上仰, 一路顶到
 // +26.1 上限并堵转 —— 视频里"云台上仰然后停住"就是它。
 
+// ============================================================ 延迟补偿(卡尔曼)
+// 链路延迟(曝光+取流+推理+PnP+串口+下位机执行)约 60~100 ms。
+// 目标 0.4 rad/s 横移时, 100 ms 就是 2.3 度滞后, 而 5 m 处 140mm 板只有 1.6 度宽。
+constexpr bool  KF_ENABLE   = true;
+// 需要实测: 用"云台匀速扫 + 比对命令角与实测角相位差"测, 或拍闪烁 LED 比对时间戳。
+// 先用 80 ms, 测出来再改。
+constexpr float KF_LATENCY_S = 0.080f;
+// 过程噪声与测量噪声。R 应由"静止靶标时 theta 的抖动标准差"实测。
+constexpr float KF_Q_ANGLE  = 1e-2f;
+constexpr float KF_Q_RATE   = 1e1f;
+constexpr float KF_R_ANGLE  = 0.5f;
+// 估计角速度达到该值才认为"目标在动"(用于开火判据的额外保守)
+constexpr float KF_MOVING_RATE_DPS = 3.0f;
+
 // ---- 瞄准偏差补偿(相机/枪口安装不平行) ----
 //
 // theta 是**相机系**的偏角, 而命令角是**云台系**的。两者之间差一个安装外参:
