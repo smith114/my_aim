@@ -27,6 +27,7 @@
 
 #include "config.hpp"
 #include "fire.hpp"
+#include "kf.hpp"
 #include "gimbal.hpp"
 #include "hik_camera.hpp"
 #include "protocol.hpp"
@@ -106,13 +107,16 @@ int main(int argc, char** argv) {
 
     Tracker    tracker;
     GimbalCtrl gimbal;
+    // 延迟补偿: latency 滑条要真的接到滤波器上, 否则它就是假旋钮
+    AngleKF kf_yaw(KF_Q_ANGLE, KF_Q_RATE, KF_R_ANGLE);
+    AngleKF kf_pitch(KF_Q_ANGLE, KF_Q_RATE, KF_R_ANGLE);
 
     const char* kW1 = "camera";
     const char* kW2 = "params";
     cv::namedWindow(kW1, cv::WINDOW_NORMAL);
     cv::namedWindow(kW2, cv::WINDOW_NORMAL);
     cv::resizeWindow(kW1, 1100, 800);
-    cv::resizeWindow(kW2, 420, 780);
+    cv::resizeWindow(kW2, 470, 900);
     cv::createTrackbar("conf x100",      kW2, &tb_conf,      95);
     cv::createTrackbar("enemy 0B 1R 2all", kW2, &tb_enemy,   2);
     cv::createTrackbar("off yaw x10",    kW2, &tb_off_yaw,   100);
@@ -166,13 +170,22 @@ int main(int argc, char** argv) {
         gimbal.aim_offset_pitch = static_cast<float>(tb_off_pitch) / 10.0f;
 
         float th_y = 0.0f, th_p = 0.0f, dist = 0.0f;
+        float raw_y = 0.0f, raw_p = 0.0f;   // 滤波前的原始测量, 用于对照
         if (follow >= 0 && follow < static_cast<int>(cand.size())) {
-            th_y = cand[follow].solve.yaw;
-            th_p = cand[follow].solve.pitch;
-            dist = cand[follow].solve.dist;
+            raw_y = cand[follow].solve.yaw;
+            raw_p = cand[follow].solve.pitch;
+            dist  = cand[follow].solve.dist;
+            kf_yaw.predict(static_cast<float>(dt));
+            kf_pitch.predict(static_cast<float>(dt));
+            kf_yaw.update(raw_y);
+            kf_pitch.update(raw_p);
+            th_y = kf_yaw.predict_ahead(static_cast<float>(tb_lat_ms) / 1000.0f);
+            th_p = kf_pitch.predict_ahead(static_cast<float>(tb_lat_ms) / 1000.0f);
             if (fresh && vis) gimbal.track(th_y, th_p);
             else if (fresh)   gimbal.stop_tracking();
         } else {
+            kf_yaw.reset();
+            kf_pitch.reset();
             gimbal.stop_tracking();
         }
         const int32_t fire = 0;
@@ -216,75 +229,100 @@ int main(int argc, char** argv) {
         cv::imshow(kW1, view);
 
         // ------------------------------------------------ window 2: params
-        cv::Mat pnl(780, 420, CV_8UC3, cv::Scalar(28, 28, 28));
-        int y = 30;
-        char b[192];
+        //
+        // 排布顺序按"现场最需要对照"来定:
+        //   RECV  —— 下位机给了我们什么(姿态/mode/弹速/帧号/年龄)
+        //   SENT  —— 我们发出去什么(含 18 字节原始报文, 协议出问题直接看这个)
+        //   DIFF  —— 发与收的差, 这是判断"云台跟没跟上"的唯一直接指标
+        //   KNOBS —— 可调项
+        cv::Mat pnl(880, 460, CV_8UC3, cv::Scalar(26, 26, 26));
+        int y = 28;
+        char b[256];
         const cv::Scalar CY(200, 230, 120), GR(150, 240, 150), OR(120, 190, 255),
                          GY(190, 190, 190), RD(80, 80, 255), GN(80, 255, 80);
 
-        head(pnl, y, "SENT", CY);
-        std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(gimbal.cmd_yaw),
-                      static_cast<double>(gimbal.cmd_pitch));
-        row(pnl, y, "cmd", b, CY);
-        std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(gimbal.last_want_yaw),
-                      static_cast<double>(gimbal.last_want_pitch));
-        row(pnl, y, "want", b, CY);
-        row(pnl, y, "fire", std::to_string(fire), CY);
-
-        y += 8;
-        head(pnl, y, "RECV", GR);
+        head(pnl, y, "RECV  (from lower machine)", GR);
         if (fb.valid) {
             std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(fb.yaw),
                           static_cast<double>(fb.pitch));
-            row(pnl, y, "fb", b, GR);
+            row(pnl, y, "yaw/pitch", b, GR);
             std::snprintf(b, sizeof(b), "%.2f", static_cast<double>(fb.roll));
             row(pnl, y, "roll", b, GR);
-            row(pnl, y, "mode", std::to_string(fb.mode) + (vis ? "  VISION ON" : "  off"), GR);
-            std::snprintf(b, sizeof(b), "%.1f m/s", static_cast<double>(fb.bullet_speed));
-            row(pnl, y, "bullet", b, GR);
-            std::snprintf(b, sizeof(b), "%.0f ms%s", fb.age() * 1000.0, fresh ? "" : "  STALE");
+            row(pnl, y, "mode", std::to_string(fb.mode) +
+                             (vis ? "  VISION ON" : "  vision off"), vis ? GN : GY);
+            std::snprintf(b, sizeof(b), "%.2f m/s", static_cast<double>(fb.bullet_speed));
+            row(pnl, y, "bullet_spd", b, GR);
+            std::snprintf(b, sizeof(b), "%.1f ms%s", fb.age() * 1000.0,
+                          fresh ? "" : "   STALE!");
             row(pnl, y, "age", b, fresh ? GR : RD);
         } else {
-            row(pnl, y, "fb", "NO DATA", RD);
+            row(pnl, y, "yaw/pitch", "NO DATA", RD);
         }
 
-        y += 8;
-        head(pnl, y, "DETECT", OR);
-        row(pnl, y, "yolo", std::to_string(boxes.size()), OR);
-        row(pnl, y, "solved", std::to_string(cand.size()), OR);
-        row(pnl, y, "state", tracker.state_name(), OR);
-        row(pnl, y, "locked", tr.locked ? "1  LOCKED" : "0", tr.locked ? GN : OR);
-        if (follow >= 0) {
-            std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(th_y),
-                          static_cast<double>(th_p));
-            row(pnl, y, "theta", b, OR);
-            std::snprintf(b, sizeof(b), "%.2f m", static_cast<double>(dist));
-            row(pnl, y, "dist", b, OR);
-            std::snprintf(b, sizeof(b), "%.1f deg",
-                          static_cast<double>(plate_angular_width_deg(dist)));
-            row(pnl, y, "plate w", b, OR);
-            std::snprintf(b, sizeof(b), "%.1f deg",
-                          static_cast<double>(fire_tolerance_deg(dist)));
-            row(pnl, y, "fire tol", b, OR);
+        y += 10;
+        head(pnl, y, "SENT  (to lower machine)", CY);
+        std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(gimbal.cmd_yaw),
+                      static_cast<double>(gimbal.cmd_pitch));
+        row(pnl, y, "ID1 yaw/pit", b, CY);
+        row(pnl, y, "ID2 fire", std::to_string(fire), CY);
+        std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(raw_y),
+                      static_cast<double>(raw_p));
+        row(pnl, y, "raw meas", b, GY);
+        std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(th_y),
+                      static_cast<double>(th_p));
+        row(pnl, y, "after KF", b, GY);
+        {   // 18 字节原始报文: 协议层出问题时直接看这个, 不用再加调试打印
+            if (gimbal.have_meas) {
+                const auto pkt = pack_tx(gimbal.cmd_yaw, gimbal.cmd_pitch, fire);
+                std::string hx;
+                char t[8];
+                for (size_t i2 = 0; i2 < pkt.size(); ++i2) {
+                    std::snprintf(t, sizeof(t), "%02X ", pkt[i2]);
+                    hx += t;
+                }
+                row(pnl, y, "18B hex", hx, CY);
+            }
         }
 
-        y += 8;
-        head(pnl, y, "PARAM", GY);
+        y += 10;
+        head(pnl, y, "DIFF  sent - recv", GY);
+        if (fb.valid && gimbal.have_meas) {
+            float dy = gimbal.cmd_yaw - fb.yaw;
+            while (dy > 180.0f)  dy -= 360.0f;
+            while (dy < -180.0f) dy += 360.0f;
+            const float dp = gimbal.cmd_pitch - fb.pitch;
+            std::snprintf(b, sizeof(b), "%+.2f / %+.2f", static_cast<double>(dy),
+                          static_cast<double>(dp));
+            row(pnl, y, "cmd - fb", b, GY);
+            // 差很大说明云台没跟上命令(或 mode=0 被忽略)
+            std::snprintf(b, sizeof(b), "%s", (std::fabs(dy) > SERVO_MAX_CORR_DEG ||
+                                               std::fabs(dp) > SERVO_MAX_CORR_DEG)
+                                                  ? "LARGE - not following" : "ok");
+            row(pnl, y, "judge", b, (std::fabs(dy) > SERVO_MAX_CORR_DEG ||
+                                     std::fabs(dp) > SERVO_MAX_CORR_DEG) ? RD : GN);
+        }
+
+        y += 10;
+        head(pnl, y, "KNOBS", OR);
         std::snprintf(b, sizeof(b), "%.2f", static_cast<double>(tb_conf) / 100.0);
-        row(pnl, y, "conf", b, GY);
-        row(pnl, y, "enemy", tb_enemy == 0 ? "blue" : (tb_enemy == 1 ? "red" : "all"), GY);
+        row(pnl, y, "conf", b, OR);
+        row(pnl, y, "enemy", tb_enemy == 0 ? "blue" : (tb_enemy == 1 ? "red" : "all"), OR);
+        std::snprintf(b, sizeof(b), "%.1f / %.1f", static_cast<double>(gimbal.aim_offset_yaw),
+                      static_cast<double>(gimbal.aim_offset_pitch));
+        row(pnl, y, "aim offset", b, OR);
+        row(pnl, y, "latency", std::to_string(tb_lat_ms) + " ms", OR);
+        std::snprintf(b, sizeof(b), "%.2f", static_cast<double>(gimbal.servo_gain));
+        row(pnl, y, "gain", b, OR);
         std::snprintf(b, sizeof(b), "%+.0f / %+.0f", gimbal.servo_dir_yaw,
                       gimbal.servo_dir_pitch);
         row(pnl, y, "servo dir", b, GY);
         std::snprintf(b, sizeof(b), "%.1f / %.1f", gimbal.effective_home_yaw(),
                       gimbal.effective_home_pitch());
         row(pnl, y, "home", b, GY);
-        std::snprintf(b, sizeof(b), "%.1f / %.1f", static_cast<double>(gimbal.aim_offset_yaw),
-                      static_cast<double>(gimbal.aim_offset_pitch));
-        row(pnl, y, "offset", b, GY);
-        row(pnl, y, "latency", std::to_string(tb_lat_ms) + " ms", GY);
-        std::snprintf(b, sizeof(b), "%.2f", static_cast<double>(gimbal.servo_gain));
-        row(pnl, y, "gain", b, GY);
+        row(pnl, y, "detect", "yolo=" + std::to_string(boxes.size()) +
+                              " solved=" + std::to_string(cand.size()) +
+                              " " + tracker.state_name() +
+                              (tr.locked ? " LOCKED" : ""), OR);
 
         cv::imshow(kW2, pnl);
 
