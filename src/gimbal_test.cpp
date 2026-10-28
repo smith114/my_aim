@@ -37,7 +37,8 @@ static void usage() {
         "  gimbal_test --query                 只读当前实测姿态\n"
         "  gimbal_test --stay                  锁住当前姿态不归零(手动对准后停在这)\n"
         "  gimbal_test --watch                 实时盯 mode/姿态 (诊断鼠标右键是否生效)\n"
-        "  gimbal_test --hold                  保持当前角(验证链路)\n"
+        "  gimbal_test --hold                  保持当前角(不接受目标角参数!)\n"
+                         "  gimbal_test --step yaw 30           在当前角基础上走 +30 度\n"
         "  gimbal_test --step <yaw|pitch> <deg> [--frames N]\n"
         "  gimbal_test --sweep <+|-><yaw|pitch> [--stop N] [--max-deg D] [--port P]\n"
         "例子:\n"
@@ -258,20 +259,32 @@ int main(int argc, char** argv) {
             link.stop();
             return 2;
         }
+        const float start_y = st.yaw;
+        const float start_p = st.pitch;
         const float ty = (axis == "yaw")   ? st.yaw + step_deg : st.yaw;
         const float tp = (axis == "pitch") ? st.pitch + step_deg : st.pitch;
         std::printf("命令 %s %+.1f 度: %.2f/%.2f -> %.2f/%.2f\n", axis.c_str(), step_deg,
                     st.yaw, st.pitch, ty, tp);
-        for (int i = 0; i < 30 && !g_stop; ++i) {
+        // 0.6 秒对上位机下发+下位机执行来说太短: 大步长还没到位就打印了结论,
+        // 会把"还在路上"误判成"反向"。改成 2.5 秒。
+        for (int i = 0; i < 125 && !g_stop; ++i) {
             link.set_target(ty, tp, 0);
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         st = link.state();
         std::printf("结果实测: yaw=%.2f pitch=%.2f  (期望 yaw=%.2f pitch=%.2f)\n",
                     st.yaw, st.pitch, ty, tp);
-        std::printf("结论: 实测跟着命令动 => 该方向通道正常且符号为 %s\n",
-                    (axis == "yaw" ? (st.yaw > ty - 0.5f && st.yaw < ty + 0.5f ? "同向" : "反向")
-                                   : (st.pitch > tp - 0.5f && st.pitch < tp + 0.5f ? "同向" : "反向")));
+        // 判定只看"朝命令方向移动了没有", 不用窄窗口:
+        // 用 (测量-起点)·(命令-起点) 的符号即可。过冲/欠冲都不影响方向判断。
+        {
+            const float d_meas = (axis == "yaw") ? (st.yaw - start_y) : (st.pitch - start_p);
+            const float d_cmd  = (axis == "yaw") ? (ty - start_y)     : (tp - start_p);
+            const float dot    = d_meas * d_cmd;
+            std::printf("结论: 实测移动 %+.2f 度, 命令移动 %+.2f 度 => %s\n",
+                        d_meas, d_cmd,
+                        (std::fabs(d_meas) < 0.5f) ? "没动(通道异常)"
+                        : (dot > 0 ? "同向(通道正常)" : "反向(命令符号与实测相反)"));
+        }
         link.stop();
         return 0;
     }
