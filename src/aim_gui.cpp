@@ -55,6 +55,7 @@ static int tb_dir_yaw   = 0;     // 默认 -1
 static int tb_dir_pitch = 0;     // 默认 -1
 static int tb_smooth    = 35;    // /100, 低通系数
 static int tb_deadband  = 5;     // /10 -> 度
+static int tb_measlp    = 25;    // /100, 实测角低通
 
 static void row(cv::Mat& m, int& y, const char* k, const std::string& v,
                 const cv::Scalar& col) {
@@ -143,6 +144,7 @@ int main(int argc, char** argv) {
     cv::createTrackbar("dirPitch 0=-1 1=+1", kW3, &tb_dir_pitch, 1);
     cv::createTrackbar("smooth x100",     kW3, &tb_smooth,   100);
     cv::createTrackbar("deadband x10",    kW3, &tb_deadband, 50);
+    cv::createTrackbar("measLP x100",     kW3, &tb_measlp,   100);
 
     double last_t = 0.0;
 
@@ -187,6 +189,7 @@ int main(int argc, char** argv) {
 
         gimbal.servo_dir_yaw   = (tb_dir_yaw   == 0) ? -1.0f : 1.0f;
         gimbal.servo_dir_pitch = (tb_dir_pitch == 0) ? -1.0f : 1.0f;
+        gimbal.meas_lp_coef     = static_cast<float>(tb_measlp) / 100.0f;
         gimbal.smooth_coef      = static_cast<float>(tb_smooth) / 100.0f;
         gimbal.deadband         = static_cast<float>(tb_deadband) / 10.0f;
         gimbal.servo_gain       = static_cast<float>(tb_gain) / 100.0f;
@@ -380,6 +383,8 @@ int main(int argc, char** argv) {
         std::snprintf(b, sizeof(b), "%.2f / %.1f deg", static_cast<double>(gimbal.smooth_coef),
                       static_cast<double>(gimbal.deadband));
         row(pnl, y, "smooth/dbz", b, OR);
+        std::snprintf(b, sizeof(b), "%.2f", static_cast<double>(gimbal.meas_lp_coef));
+        row(pnl, y, "measLP", b, OR);
         std::snprintf(b, sizeof(b), "%+.0f / %+.0f  (dirYaw/dirPitch)",
                       gimbal.servo_dir_yaw, gimbal.servo_dir_pitch);
         row(pnl, y, "servo dir", b, OR);

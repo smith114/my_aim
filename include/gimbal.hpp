@@ -67,6 +67,16 @@ public:
 
 
 
+    // ******** 命令基准用的低通实测角 ********
+    // 控制律是 cmd = meas + DIR*theta。这等于把**编码器噪声直接放进命令**:
+    // 云台于是在追自己的测量抖动, 表现为静止靶也左右/上下持续晃(极限环)。
+    // theta 已由 pixel-vs-PnP 交叉校验确认可信(差 0.00), 所以抖动来源是 meas。
+    // 用一阶低通后的 meas 作基准, 云台就不再追自己的噪声。
+    float meas_lp_yaw     = 0.0f;
+    float meas_lp_pitch   = 0.0f;
+    bool  meas_lp_inited_ = false;
+    float meas_lp_coef    = 0.25f;   // 越小越平滑, 但跟随真实运动的滞后越大
+
     float last_want_yaw   = 0.0f;
     float last_want_pitch = 0.0f;
     float last_theta_yaw = 0.0f;    // 上一帧相机系偏差(自检用)
@@ -139,6 +149,7 @@ public:
         // 中断够久才重新软启动, 否则沿用之前的进度 —— 见 stop_tracking 的说明。
         if (gap_cnt_ > kRegapFrames) {
             soft_cnt_ = 0;
+            meas_lp_inited_ = false;
             sm_yaw_   = 0.0f;
             sm_pitch_ = 0.0f;
         }
@@ -196,16 +207,23 @@ public:
         // 减掉安装偏差: 修正量只针对"真正的瞄准误差", 不含相机与云台的固定错位。
         const float ty_aim = ty - aim_offset_yaw;
         const float tp_aim = tp - aim_offset_pitch;
+        // 低通实测角作为命令基准(见成员处说明)
+        if (!meas_lp_inited_) {
+            meas_lp_yaw = meas_yaw; meas_lp_pitch = meas_pitch; meas_lp_inited_ = true;
+        }
+        meas_lp_yaw   = meas_lp_yaw   * (1.0f - meas_lp_coef) + meas_yaw   * meas_lp_coef;
+        meas_lp_pitch = meas_lp_pitch * (1.0f - meas_lp_coef) + meas_pitch * meas_lp_coef;
+
         const float cy = clamp_val(servo_dir_yaw   * ty_aim * servo_gain * ramp,
                                    -SERVO_MAX_CORR_DEG, SERVO_MAX_CORR_DEG);
         const float cp = clamp_val(servo_dir_pitch * tp_aim * servo_gain * ramp,
                                    -SERVO_MAX_CORR_DEG, SERVO_MAX_CORR_DEG);
 
-        last_want_yaw   = meas_yaw   + cy;
-        last_want_pitch = meas_pitch + cp;
+        last_want_yaw   = meas_lp_yaw   + cy;
+        last_want_pitch = meas_lp_pitch + cp;
 
-        cmd_yaw   = wrap_or_clamp_yaw(meas_yaw + cy);
-        cmd_pitch = wrap_or_clamp_pitch(meas_pitch + cp);
+        cmd_yaw   = wrap_or_clamp_yaw(meas_lp_yaw + cy);
+        cmd_pitch = wrap_or_clamp_pitch(meas_lp_pitch + cp);
         apply_envelope();   // 再套一层安全包络
         return true;
     }
