@@ -44,6 +44,10 @@ public:
 
     // 状态
     bool  tracking = false;
+    // 上一帧算出的"期望角"(未限幅/未包络), 仅用于日志诊断:
+    // 看 want 与 cmd 的差就知道限速/包络是否在削, 看 want 与 fb 的差就知道跟没跟上。
+    float last_want_yaw   = 0.0f;
+    float last_want_pitch = 0.0f;
     float last_theta_yaw = 0.0f;    // 上一帧相机系偏差(自检用)
 
     // 更新实测姿态(由接收线程的数据喂入)
@@ -147,6 +151,8 @@ public:
         const float want_pitch = meas_pitch + servo_dir_pitch * tp * SERVO_GAIN * ramp;
 
         // 限幅步进: 每帧最多转 SERVO_MAX_STEP 度, 防大偏差时猛甩
+        last_want_yaw   = want_yaw;
+        last_want_pitch = want_pitch;
         cmd_yaw   = step_toward(cmd_yaw,   want_yaw,   SERVO_MAX_STEP);
         cmd_pitch = step_toward(cmd_pitch, want_pitch, SERVO_MAX_STEP);
         cmd_yaw   = wrap_or_clamp_yaw(cmd_yaw);

@@ -152,6 +152,7 @@ float synth_dist_mm     = 2500.0f;   // 靶标距离(mm)
 float synth_noise       = 0.0f;      // 图像高斯噪声标准差(0=干净)
 int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑制)
     int  max_frames  = 0;
+    int  log_every   = 30;   // 日志间隔帧数, --log-every 可改
     std::string bayer_name_arg;
 
     for (int i = 1; i < argc; ++i) {
@@ -210,6 +211,8 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             log_path = argv[++i];
         } else if (a == "--frames" && i + 1 < argc) {
             max_frames = std::atoi(argv[++i]);
+        } else if (a == "--log-every" && i + 1 < argc) {
+            log_every = std::max(1, std::atoi(argv[++i]));
         } else if (a == "-h" || a == "--help") {
             std::cout << "用法: my_aim [--debug] [--headless] [--mock] [--save-video]\n"
                          "              [--yolo [--model XML] [--conf C] [--enemy blue|red]]\n"
@@ -654,17 +657,20 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             vid_writer.write(disp);
         }
 
-        if (frame_cnt % 30 == 0) {
+        if (frame_cnt % log_every == 0) {
             const RxState& s = fb;   // 同上: mock 下才有意义的值
             LOG("[DET] f=%d bars=%.1f armor=%.1f solved=%.1f locked=%.1f state=%s "
-                "cmd=%.1f/%.1f fb=%.1f/%.1f home=%.1f/%.1f mode=%d th=%.1f/%.1f "
+                "want=%.1f/%.1f cmd=%.1f/%.1f fb=%.1f/%.1f home=%.1f/%.1f mode=%d th=%.1f/%.1f "
                 "lock_age=%d rx=%llu resync=%llu wd=%llu\n",
-                frame_cnt, stat_bars / 30.0, stat_armor / 30.0, stat_solved / 30.0,
-                stat_locked / 30.0, tracker.state_name(), gimbal.cmd_yaw, gimbal.cmd_pitch,
+                frame_cnt, stat_bars / static_cast<double>(log_every),
+                stat_armor / static_cast<double>(log_every),
+                stat_solved / static_cast<double>(log_every),
+                stat_locked / static_cast<double>(log_every), tracker.state_name(), gimbal.cmd_yaw, gimbal.cmd_pitch,
                 s.valid ? s.yaw : 0.0f, s.valid ? s.pitch : 0.0f,
                 gimbal.home_yaw, gimbal.home_pitch,
                 s.valid ? s.mode : -1,
                 theta_yaw, theta_pitch,
+                gimbal.last_want_yaw, gimbal.last_want_pitch,
                 frame_cnt - last_locked_frame,   // 距上次成功锁定过了多少帧
                 static_cast<unsigned long long>(link.rx_frames()),
                 static_cast<unsigned long long>(link.resync_drops()),
