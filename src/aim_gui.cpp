@@ -118,20 +118,27 @@ int main(int argc, char** argv) {
     AngleKF kf_yaw(KF_Q_ANGLE, KF_Q_RATE, KF_R_ANGLE);
     AngleKF kf_pitch(KF_Q_ANGLE, KF_Q_RATE, KF_R_ANGLE);
 
+    // 三个窗口, 各干一件事。
+    // 关键: **滑条必须单独一个窗口**。OpenCV 的滑条占用窗口内部空间,
+    // 8 个滑条约占 200px, 会把下面的文本顶出可视区 —— 之前"重要参数看不到"
+    // 就是被裁掉了, 不是没画。
     const char* kW1 = "camera";
     const char* kW2 = "params";
+    const char* kW3 = "knobs";
     cv::namedWindow(kW1, cv::WINDOW_NORMAL);
     cv::namedWindow(kW2, cv::WINDOW_NORMAL);
+    cv::namedWindow(kW3, cv::WINDOW_NORMAL);
     cv::resizeWindow(kW1, 1100, 800);
-    cv::resizeWindow(kW2, 470, 900);
-    cv::createTrackbar("conf x100",      kW2, &tb_conf,      95);
-    cv::createTrackbar("enemy 0B 1R 2all", kW2, &tb_enemy,   2);
-    cv::createTrackbar("off yaw x10",    kW2, &tb_off_yaw,   100);
-    cv::createTrackbar("off pitch x10",  kW2, &tb_off_pitch, 100);
-    cv::createTrackbar("latency ms",     kW2, &tb_lat_ms,    300);
-    cv::createTrackbar("gain x100",      kW2, &tb_gain,      200);
-    cv::createTrackbar("dirYaw 0=-1 1=+1", kW2, &tb_dir_yaw,   1);
-    cv::createTrackbar("dirPitch 0=-1 1=+1", kW2, &tb_dir_pitch, 1);
+    cv::resizeWindow(kW2, 470, 700);
+    cv::resizeWindow(kW3, 420, 340);
+    cv::createTrackbar("conf x100",      kW3, &tb_conf,      95);
+    cv::createTrackbar("enemy 0B 1R 2all", kW3, &tb_enemy,   2);
+    cv::createTrackbar("off yaw x10",    kW3, &tb_off_yaw,   100);
+    cv::createTrackbar("off pitch x10",  kW3, &tb_off_pitch, 100);
+    cv::createTrackbar("latency ms",     kW3, &tb_lat_ms,    300);
+    cv::createTrackbar("gain x100",      kW3, &tb_gain,      200);
+    cv::createTrackbar("dirYaw 0=-1 1=+1", kW3, &tb_dir_yaw,   1);
+    cv::createTrackbar("dirPitch 0=-1 1=+1", kW3, &tb_dir_pitch, 1);
 
     double last_t = 0.0;
 
@@ -247,17 +254,17 @@ int main(int argc, char** argv) {
         //   SENT  —— 我们发出去什么(含 18 字节原始报文, 协议出问题直接看这个)
         //   DIFF  —— 发与收的差, 这是判断"云台跟没跟上"的唯一直接指标
         //   KNOBS —— 可调项
-        cv::Mat pnl(880, 460, CV_8UC3, cv::Scalar(26, 26, 26));
+        cv::Mat pnl(700, 460, CV_8UC3, cv::Scalar(26, 26, 26));
         int y = 28;
         char b[256];
         const cv::Scalar CY(200, 230, 120), GR(150, 240, 150), OR(120, 190, 255),
                          GY(190, 190, 190), RD(80, 80, 255), GN(80, 255, 80);
 
-        head(pnl, y, "RECV  (from lower machine)", GR);
+        head(pnl, y, "RECV  <- lower machine", GR);
         if (fb.valid) {
             std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(fb.yaw),
                           static_cast<double>(fb.pitch));
-            row(pnl, y, "yaw/pitch", b, GR);
+            row(pnl, y, "fb (now)", b, GR);
             std::snprintf(b, sizeof(b), "%.2f", static_cast<double>(fb.roll));
             row(pnl, y, "roll", b, GR);
             row(pnl, y, "mode", std::to_string(fb.mode) +
@@ -268,15 +275,15 @@ int main(int argc, char** argv) {
                           fresh ? "" : "   STALE!");
             row(pnl, y, "age", b, fresh ? GR : RD);
         } else {
-            row(pnl, y, "yaw/pitch", "NO DATA", RD);
+            row(pnl, y, "fb (now)", "NO DATA", RD);
         }
 
         y += 10;
-        head(pnl, y, "SENT  (to lower machine)", CY);
+        head(pnl, y, "SENT  -> lower machine", CY);
         std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(gimbal.cmd_yaw),
                       static_cast<double>(gimbal.cmd_pitch));
-        row(pnl, y, "ID1 yaw/pit", b, CY);
-        row(pnl, y, "ID2 fire", std::to_string(fire), CY);
+        row(pnl, y, "cmd (ID1)", b, CY);
+        row(pnl, y, "fire (ID2)", std::to_string(fire), CY);
         std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(raw_y),
                       static_cast<double>(raw_p));
         row(pnl, y, "raw meas", b, GY);
@@ -337,6 +344,31 @@ int main(int argc, char** argv) {
                               (tr.locked ? " LOCKED" : ""), OR);
 
         cv::imshow(kW2, pnl);
+
+        // knobs 窗口本身只放滑条(OpenCV 会自己画), 这里补一句提示
+        {
+            static cv::Mat hint(120, 420, CV_8UC3, cv::Scalar(26, 26, 26));
+            static bool once = false;
+            if (!once) {
+                int hy = 24;
+                cv::putText(hint, "KNOBS - drag to change live", cv::Point(12, hy),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(120, 190, 255), 1);
+                hy += 26;
+                cv::putText(hint, "dirYaw/dirPitch: servo sign", cv::Point(12, hy),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(190, 190, 190), 1);
+                hy += 20;
+                cv::putText(hint, "off yaw/pitch: aim offset", cv::Point(12, hy),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(190, 190, 190), 1);
+                hy += 20;
+                cv::putText(hint, "latency: KF predict horizon", cv::Point(12, hy),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(190, 190, 190), 1);
+                hy += 20;
+                cv::putText(hint, "gain: servo gain", cv::Point(12, hy),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(190, 190, 190), 1);
+                cv::imshow(kW3, hint);
+                once = true;
+            }
+        }
 
         const int k = cv::waitKey(1);
         if (k == 27 || k == 'q') break;
