@@ -131,6 +131,10 @@ bool auto_scan = ENABLE_AUTO_SCAN;
 // **YOLO 是唯一检测器** —— 灯条法已从主流程移除(sort 见下方检测段注释)。
 bool use_yolo       = true;
 bool hold_only      = false;   // --hold: 只保持姿态, 不推进伺服
+// 运行时覆盖伺服方向, 便于现场一次试完 4 种组合而不用重编译。
+// 0 表示"不覆盖, 用 config.hpp 的值"。
+float cli_dir_yaw   = 0.0f;
+float cli_dir_pitch = 0.0f;
 int  want_color     = -1;      // 颜色过滤: -1=不过滤 0=只蓝 1=只红
 int  yolo_profile_sel = YOLO_PROFILE_SELECT;   // 见 config.hpp, 当前默认 v11
 float yolo_conf     = YOLO_CONF_THRESH;
@@ -164,6 +168,10 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             auto_scan = true;
         } else if (a == "--yolo") {
             use_yolo = true;   // 默认已开, 保留兼容
+        } else if (a == "--dir-yaw" && i + 1 < argc) {
+            cli_dir_yaw = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--dir-pitch" && i + 1 < argc) {
+            cli_dir_pitch = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--hold") {
             // 只保持当前姿态: 不做任何伺服推进, 检测照跑(便于观察),
             // 云台一动不动。用于"确认切换瞬间不会动"和现场比对。
@@ -322,6 +330,12 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
     // ---------------------------------------------------------- 状态
     Tracker    tracker;
     GimbalCtrl gimbal;
+    // 现场用 --dir-yaw / --dir-pitch 覆盖符号, 不用重编译
+    if (cli_dir_yaw   != 0.0f) gimbal.servo_dir_yaw   = (cli_dir_yaw   > 0 ? 1.0f : -1.0f);
+    if (cli_dir_pitch != 0.0f) gimbal.servo_dir_pitch = (cli_dir_pitch > 0 ? 1.0f : -1.0f);
+    LOG("[SERVO] 方向符号 yaw=%+.0f pitch=%+.0f%s\n",
+        gimbal.servo_dir_yaw, gimbal.servo_dir_pitch,
+        (cli_dir_yaw != 0.0f || cli_dir_pitch != 0.0f) ? "  (命令行覆盖)" : "  (config.hpp)");
 
     // mock 模式没有下位机回传, 用"命令角即真实角"的假设把闭环跑起来,
     // 这样可以纯离线验证 检测->解算->跟踪->伺服 整条链路的逻辑。
