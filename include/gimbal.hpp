@@ -86,6 +86,8 @@ public:
             home_pitch = home_pitch * 0.7f + pitch * 0.3f;
             if (++home_cnt_ >= HOME_STABLE_FRAMES) {
                 home_locked_ = true;
+                home_frozen_yaw   = home_yaw;
+                home_frozen_pitch = home_pitch;
                 std::printf("[GIMBAL] 启动姿态锁定 home=%.2f/%.2f\n", home_yaw, home_pitch);
             }
         }
@@ -108,6 +110,8 @@ public:
         // 这里用当前已累计的估计值当场锁定, 之后不再变。
         if (!home_locked_) {
             home_locked_ = true;
+            home_frozen_yaw   = home_yaw;
+            home_frozen_pitch = home_pitch;
             std::printf("[GIMBAL] 开始跟踪, 冻结包络中心 home=%.2f/%.2f\n",
                         static_cast<double>(home_yaw), static_cast<double>(home_pitch));
         }
@@ -233,6 +237,14 @@ public:
     // 短暂的 mode 闪烁 / 单帧漏检不清状态。
     static constexpr int kRegapFrames = 25;
 
+    // ---- 包络中心: 用一对**只在冻结时写一次**的常量 ----
+    // 实测问题(10-28): home_yaw/home_pitch 在运行中被观察到从 -47.67 跳到 0.4、12.2,
+    // 最后变成 0.0/0.0 —— 包络中心错了, apply_envelope() 就把命令夹到错误区间,
+    // 云台表现为"命令在变但实测不动"。
+    // 与其继续排查哪条路径改的, 不如让它**结构上不可能被改**:
+    // home_frozen_* 只在 home_locked_ 由 false 变 true 的那一次赋值, 之后无任何写入点。
+    float home_frozen_yaw   = 0.0f;
+    float home_frozen_pitch = 0.0f;
     float home_yaw   = 0.0f;   // 启动姿态(安全包络中心)
     float home_pitch = 0.0f;
 
@@ -251,13 +263,16 @@ public:
     //   tests/gimbal_edge.cpp 专门测这一条。
     void apply_envelope() {
         // yaw: 回绕轴
-        const float dy = wrap_delta(cmd_yaw - home_yaw);
-        if (dy >  GIMBAL_ENVELOPE_DEG) cmd_yaw = wrap360(home_yaw + GIMBAL_ENVELOPE_DEG);
-        if (dy < -GIMBAL_ENVELOPE_DEG) cmd_yaw = wrap360(home_yaw - GIMBAL_ENVELOPE_DEG);
+        // 只用冻结后的中心: 结构上不会被运行中的任何路径改写
+        const float hy = home_locked_ ? home_frozen_yaw : home_yaw;
+        const float dy = wrap_delta(cmd_yaw - hy);
+        if (dy >  GIMBAL_ENVELOPE_DEG) cmd_yaw = wrap360(hy + GIMBAL_ENVELOPE_DEG);
+        if (dy < -GIMBAL_ENVELOPE_DEG) cmd_yaw = wrap360(hy - GIMBAL_ENVELOPE_DEG);
 
         // pitch: 有限行程轴 —— 先按相对包络限, 再按机械行程硬限, 全程 clamp。
         // 两道都要: 相对包络防"离瞄准点太远", 机械行程防"顶到限位"。
-        const float dp = cmd_pitch - home_pitch;
+        const float hp = home_locked_ ? home_frozen_pitch : home_pitch;
+        const float dp = cmd_pitch - hp;
         if (dp >  GIMBAL_ENVELOPE_DEG) cmd_pitch = home_pitch + GIMBAL_ENVELOPE_DEG;
         if (dp < -GIMBAL_ENVELOPE_DEG) cmd_pitch = home_pitch - GIMBAL_ENVELOPE_DEG;
         cmd_pitch = clamp_val(cmd_pitch, pitch_lo(), pitch_hi());
