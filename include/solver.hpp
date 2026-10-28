@@ -22,6 +22,11 @@ namespace srm {
 struct SolveResult {
     // 目标中心在相机系的三维位置(mm) —— 给 3D 卡尔曼用
     float px = 0.0f, py = 0.0f, pz = 0.0f;
+    // 装甲板**板面朝向**(rad), 由 PnP 的旋转向量算。
+    // 同济 EKF 的 Target::update() 用这个量判断"看到的是四块板中的哪一块",
+    // 没有它就无法把观测关联到 armor_num 个虚拟板中的某一个。
+    // 约定: 0 表示板面正对相机; 符号与相机系 yaw 同向。
+    float yaw_raw = 0.0f;
     bool  ok    = false;
     float dist  = 0.0f;   // 目标到相机光心距离, 米
     float yaw   = 0.0f;   // 相机系 yaw 偏差角, 度 (+ = 目标偏右)
@@ -110,6 +115,18 @@ inline SolveResult solve_pnp(const std::vector<cv::Point2f>& img_pts) {
     const double y = pr.tvec.at<double>(1);
     const double z = pr.tvec.at<double>(2);
     if (z <= 1.0) return out;   // 目标在光轴后方或贴脸, 判为无效
+
+    // 板面朝向: 板坐标系的 z 轴是板法线, 用 rvec 旋转后取水平分量
+    {
+        cv::Mat R;
+        cv::Rodrigues(pr.rvec, R);
+        // 法线 = R * [0,0,1]
+        const double nx = R.at<double>(0, 2);
+        const double nz = R.at<double>(2, 2);
+        // (法线的 y 分量对"水平朝向"没用, 这里不需要)
+        // 取水平面内的朝向; 板正对相机时 nx≈0, nz≈±1 -> yaw_raw≈0
+        out.yaw_raw = static_cast<float>(std::atan2(nx, std::fabs(nz)) );
+    }
 
     out.px    = static_cast<float>(x);
     out.py    = static_cast<float>(y);
