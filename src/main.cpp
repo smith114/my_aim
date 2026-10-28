@@ -194,6 +194,7 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             max_frames = std::atoi(argv[++i]);
         } else if (a == "-h" || a == "--help") {
             std::cout << "用法: my_aim [--debug] [--headless] [--mock] [--save-video]\n"
+                         "              [--yolo [--model XML] [--conf C] [--enemy blue|red]]\n"
                          "              [--scan] [--bayer rg|bg|gr|gb]\n"
                          "              [--snapshot-dir DIR] [--log FILE]\n"
                          "              [--frames N] [video|image]\n"
@@ -204,6 +205,11 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                          "  --dist M        模拟靶标距离, 米(默认 2.5)\n"
                          "  --noise N       合成图高斯噪声标准差(默认 0)\n"
                          "  --distractors N 合成图随机亮斑干扰数(默认 0)\n"
+                         "  --yolo          YOLO 神经网络检测为主(需 OpenVINO), 灯条法兜底\n"
+                         "  --model XML     指定模型(默认见 config.hpp)\n"
+                         "  --conf C        置信度阈值(默认 0.30)\n"
+                         "  --enemy blue|red  只跟某一方装甲板\n"
+                         "  --no-fallback   纯 YOLO, 不回退灯条法\n"
                          "  --bayer         指定相机 Bayer 相位(默认见 config.hpp)\n";
             return 0;
         } else {

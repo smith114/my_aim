@@ -88,6 +88,25 @@ endfunction()
 # 是否编入 YOLO 检测分支 (HAVE_OPENVINO 宏), 以及是否链接 openvino::runtime。
 find_package(OpenVINO QUIET)
 
+# 系统安装包 (官方 tarball 装到 /opt/intel/openvino_*) 需要先 source setupvars.sh
+# 才会设 OpenVINO_DIR。但要求所有人"先在每个新 shell 里 source 再 cmake"太容易踩,
+# 所以这里主动去标准安装位置找一遍。实测 NUC 上装了 2024.6.0 却因没 source 而
+# 报告"没有 OpenVINO", 导致 yolo_test 没编、主程序也没有 --yolo。
+if(NOT OpenVINO_FOUND)
+  file(GLOB _ov_sys_dirs "/opt/intel/openvino_*/runtime/cmake")
+  list(SORT _ov_sys_dirs ORDER DESCENDING)     # 多版本时优先新的
+  foreach(_d ${_ov_sys_dirs})
+    if(EXISTS "${_d}/OpenVINOConfig.cmake")
+      list(APPEND CMAKE_PREFIX_PATH "${_d}")
+      find_package(OpenVINO QUIET)
+      if(OpenVINO_FOUND)
+        message(STATUS "OpenVINO: 从系统安装位置找到 (${_d})")
+        break()
+      endif()
+    endif()
+  endforeach()
+endif()
+
 # pip 安装的 openvino 不会进系统 CMAKE_PREFIX_PATH, 但包内自带 cmake 配置。
 # 这里主动问一下 python 它的位置, 让 `pip install openvino` 也能被找到 ——
 # 否则同一个包 python 能用、CMake 说没有, 很难理解。
