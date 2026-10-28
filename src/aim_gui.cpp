@@ -31,6 +31,7 @@
 #include "gimbal.hpp"
 #include "hik_camera.hpp"
 #include "protocol.hpp"
+#include "select.hpp"
 #include "solver.hpp"
 #include "tracker.hpp"
 #include "yolo_armor.hpp"
@@ -110,8 +111,9 @@ int main(int argc, char** argv) {
         if (still.empty()) { std::fprintf(stderr, "[ERR] no %s\n", img.c_str()); return 1; }
     }
 
-    Tracker    tracker;
-    GimbalCtrl gimbal;
+    Tracker       tracker;
+    GimbalCtrl    gimbal;
+    PlateSelector selector;
     // 延迟补偿: latency 滑条要真的接到滤波器上, 否则它就是假旋钮
     AngleKF kf_yaw(KF_Q_ANGLE, KF_Q_RATE, KF_R_ANGLE);
     AngleKF kf_pitch(KF_Q_ANGLE, KF_Q_RATE, KF_R_ANGLE);
@@ -164,8 +166,8 @@ int main(int argc, char** argv) {
         }
 
         const TrackResult tr = tracker.update(cand);
-        int follow = -1;
-        if (!cand.empty()) follow = (tr.locked && tr.index >= 0) ? tr.index : 0;
+        // 与主程序**同一份**选择逻辑(含迟滞), 否则界面上看到的抖动不代表实车行为
+        const int follow = selector.pick(cand);
 
         const RxState fb = link.state();
         const bool fresh = fb.valid && fb.age() < 0.2;
@@ -195,6 +197,7 @@ int main(int argc, char** argv) {
         } else {
             kf_yaw.reset();
             kf_pitch.reset();
+            selector.reset();
             gimbal.stop_tracking();
         }
         const int32_t fire = 0;

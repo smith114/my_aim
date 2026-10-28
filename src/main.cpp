@@ -36,6 +36,7 @@
 #include "fire.hpp"
 #include "kf.hpp"
 #include "protocol.hpp"
+#include "select.hpp"
 #include "solver.hpp"
 #include "synth.hpp"
 #include "tracker.hpp"
@@ -341,8 +342,9 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
     }
 
     // ---------------------------------------------------------- 状态
-    Tracker    tracker;
-    GimbalCtrl gimbal;
+    Tracker       tracker;
+    GimbalCtrl    gimbal;
+    PlateSelector selector;
     // 延迟补偿: yaw / pitch 各一套, 互相独立
     AngleKF kf_yaw(KF_Q_ANGLE, KF_Q_RATE, KF_R_ANGLE);
     AngleKF kf_pitch(KF_Q_ANGLE, KF_Q_RATE, KF_R_ANGLE);
@@ -530,52 +532,11 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         // 云台把目标往画面中心压, 检测反而更稳, 锁定是水到渠成的结果。
         // 这也是常规做法: 跟踪器负责"跟哪一个 + 平滑", 而不是负责"要不要动"。
         // ------------------------------------------------ 选哪一块板
-        //
-        // 问题(实测): 旋转靶标在某些角度会**同时看到两块板**, 于是选点在两块之间
-        // 来回跳, 云台就左右抖。单纯"取离画面中心最近的"必然抖 —— 两块对称时
-        // 距离几乎相等, 噪声就决定了选谁。
-        //
-        // 三条规则合起来止跳:
-        //   1) **迟滞**: 优先留在上一帧选中的那块, 只有它消失或明显更差才换
-        //   2) **板面朝向**: 两块都能看到时, 选 |yaw_raw| 更小的 —— 它更正对相机,
-        //      打它有效命中面积最大。这是物理判据, 不是启发式
-        //   3) 换目标需要**足够的改善幅度**(kSwitchMargin), 避免在临界点抖动
-        static int   sel_idx   = -1;
-        static float sel_yaw   = 0.0f;   // 上一帧选中板的解算角度, 用于识别"还是那一块"
-        int follow = -1;
-        if (!candidates.empty()) {
-            constexpr float kSwitchMargin = 1.35f;   // 新目标要好几倍才换
-            int   best_i   = -1;
-            float best_cost = 1e9f;
-            int   prev_i   = -1;
-            float prev_cost = 1e9f;
-
-            for (size_t i = 0; i < candidates.size(); ++i) {
-                // 代价 = 板面朝向(主要) + 与上一帧选中位置的角度差(连续性)
-                const float facing = std::fabs(candidates[i].solve.yaw_raw) * 57.29578f;
-                const float cont   = std::fabs(candidates[i].solve.yaw - sel_yaw);
-                const float cost   = facing + 0.5f * cont;
-                if (cost < best_cost) { best_cost = cost; best_i = static_cast<int>(i); }
-                // 找出"就是上一帧那一块"的候选(角度接近)
-                if (sel_idx >= 0 && cont < SELECT_SAME_TARGET_DEG && cost < prev_cost) {
-                    prev_cost = cost;
-                    prev_i = static_cast<int>(i);
-                }
-            }
-
-            // 迟滞: 还能看到原来那块, 且新最优没有明显更好 -> 不换
-            if (prev_i >= 0 && best_cost * kSwitchMargin > prev_cost) {
-                follow = prev_i;
-            } else {
-                follow = best_i;
-            }
-            if (follow >= 0) {
-                sel_idx = follow;
-                sel_yaw = candidates[follow].solve.yaw;
-            }
-        } else {
-            sel_idx = -1;   // 没有候选 -> 忘掉上次选择
-        }
+        // 逻辑在 select.hpp, **与 aim_gui 共用同一份实现**。
+        // 曾经两处各写一套, 结果 GUI 上看到的两板跳动在主程序里其实已经修好,
+        // 界面上看到的现象和实车行为不一致, 白查了一轮。
+        const int follow = selector.pick(candidates);
+        if (follow < 0) selector.reset();
 
         // ------------------------------------------------ 取回传
         // 真机走真实回传; mock 模式(没有下位机, 或用视频离线跑)用一个简单被控
