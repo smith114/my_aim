@@ -767,9 +767,20 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         float f_speed = fb.has_bullet_speed ? fb.bullet_speed : last_bullet_speed;
         if (!(f_speed > FIRE_MIN_BULLET_SPEED)) f_speed = BULLET_SPEED_DEFAULT;
         const bool  f_prev  = (fire_lock_streak >= FIRE_LOCK_FRAMES);
+        // ******** 判据必须用【残余误差】, 不是原始 theta ********
+        //
+        // 枪口不在相机光轴上(实测: 枪口在相机下方), 所以操作手会预设一个
+        // 向上的 aim_offset。于是**正确瞄准时目标本来就不在光轴上**:
+        //   theta 稳态 ≈ offset ≠ 0
+        // 而开火判据要求 |theta| <= 容差(5m 处 0.9 度) -> 永远不满足,
+        // 表现为"一直停火", 与被控对象是否对准完全无关。
+        //
+        // 真正的瞄准误差是 theta - offset: 它等于 0 才表示"枪口正对目标"。
+        const float err_y = theta_yaw   - gimbal.aim_offset_yaw;
+        const float err_p = theta_pitch - gimbal.aim_offset_pitch;
         const bool  fire_ok = fire_decision(
             (ENABLE_FIRE || cli_enable_fire), tr.locked, vision_on, fb_fresh,
-            (follow >= 0), f_dist, theta_yaw, theta_pitch, f_speed, fire_lock_streak);
+            (follow >= 0), f_dist, err_y, err_p, f_speed, fire_lock_streak);
 
         // 连击计数: 基本条件都满足才累加(与判据里的锁定帧数门限配合)
         const bool f_base = (ENABLE_FIRE || cli_enable_fire) && tr.locked && vision_on &&
@@ -786,8 +797,9 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 static_cast<double>(f_dist),
                 static_cast<double>(plate_angular_width_deg(f_dist)),
                 static_cast<double>(fire_tolerance_deg(f_dist)),
-                static_cast<double>(std::sqrt(theta_yaw * theta_yaw +
-                                              theta_pitch * theta_pitch)));
+                static_cast<double>(std::sqrt(
+                    (theta_yaw   - gimbal.aim_offset_yaw)   * (theta_yaw   - gimbal.aim_offset_yaw) +
+                    (theta_pitch - gimbal.aim_offset_pitch) * (theta_pitch - gimbal.aim_offset_pitch))));
         } else if (!fire_ok && f_prev) {
             LOG("[FIRE] 停火\n");
         }
