@@ -150,15 +150,7 @@ public:
             // 必须先把自动关掉, 否则手动值会被自动算法立刻覆盖
             MV_CC_SetEnumValue(handle_, "ExposureAuto", 0);   // 0 = Off
             MV_CC_SetEnumValue(handle_, "GainAuto", 0);
-            const int r1 = MV_CC_SetFloatValue(handle_, "ExposureTime",
-                                               srm::CAM_EXPOSURE_US);
-            const int r2 = MV_CC_SetFloatValue(handle_, "Gain", srm::CAM_GAIN_DB);
-            std::cout << "[HIK] 曝光: 固定 " << srm::CAM_EXPOSURE_US << " us, 增益 "
-                      << srm::CAM_GAIN_DB << " dB (ret=" << r1 << "/" << r2 << ")\n";
-            if (r1 != MV_OK || r2 != MV_OK) {
-                std::cerr << "[HIK] warn: 曝光/增益设置失败(ret=" << r1 << "/" << r2
-                          << "), 相机可能不支持手动模式\n";
-            }
+            apply_exposure(srm::CAM_EXPOSURE_US, srm::CAM_GAIN_DB);
         }
 
         std::cout << "[BAYER] 初始相位 " << bayer_code_name(bayer_code_)
@@ -216,6 +208,29 @@ public:
         return true;
     }
 
+    // 运行时改曝光/增益。用于现场快速扫参数, 不必每次重编译。
+    // 必须在 open() 之后、start() 抓流之前或抓流中调用都可以。
+    bool apply_exposure(float exposure_us, float gain_db) {
+        if (!handle_) return false;
+        // 先确保自动模式关掉, 否则手动值会被立刻覆盖
+        MV_CC_SetEnumValue(handle_, "ExposureAuto", 0);
+        MV_CC_SetEnumValue(handle_, "GainAuto", 0);
+        const int r1 = MV_CC_SetFloatValue(handle_, "ExposureTime", exposure_us);
+        const int r2 = MV_CC_SetFloatValue(handle_, "Gain", gain_db);
+        std::cout << "[HIK] 曝光: 固定 " << exposure_us << " us, 增益 " << gain_db
+                  << " dB (ret=" << r1 << "/" << r2 << ")\n";
+        if (r1 != MV_OK || r2 != MV_OK) {
+            std::cerr << "[HIK] warn: 曝光/增益设置失败(ret=" << r1 << "/" << r2
+                      << "), 相机可能不支持手动模式\n";
+            return false;
+        }
+        exposure_us_ = exposure_us;
+        gain_db_     = gain_db;
+        return true;
+    }
+    float exposure_us() const { return exposure_us_; }
+    float gain_db() const { return gain_db_; }
+
     // 显式关闭, 便于 main 在退出前释放相机(而不是等析构)
     void close() {
         if (grabbing_) {
@@ -239,4 +254,6 @@ private:
     bool grabbing_;
     int fmt_;
     int bayer_code_;       // cvtColor Bayer code, T键现场切换
+    float exposure_us_ = srm::CAM_EXPOSURE_US;   // 当前实际生效值(现场可改)
+    float gain_db_     = srm::CAM_GAIN_DB;
 };

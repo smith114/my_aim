@@ -128,10 +128,10 @@ bool auto_scan = ENABLE_AUTO_SCAN;
 // ---- YOLO 检测 ----
 // 默认关闭: 模型目前在我们这种过曝/暗场景下会静默返回空(max score 0.04),
 // 用 --yolo 显式开启。开启后默认带灯条法兜底(hybrid)。
-bool use_yolo       = false;
-bool yolo_fallback  = true;    // YOLO 没结果时回退灯条法
+// **YOLO 是唯一检测器** —— 灯条法已从主流程移除(sort 见下方检测段注释)。
+bool use_yolo       = true;
 int  want_color     = -1;      // 颜色过滤: -1=不过滤 0=只蓝 1=只红
-std::string yolo_model = YOLO_MODEL_XML;
+int  yolo_profile_sel = YOLO_PROFILE_SELECT;   // 见 config.hpp, 当前默认 v11
 float yolo_conf     = YOLO_CONF_THRESH;
 int   stat_yolo_boxes = 0;
 int   stat_detsrc[3] = {0, 0, 0};   // 0=灯条法 1=YOLO 2=YOLO空->回退
@@ -162,11 +162,16 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         } else if (a == "--scan") {
             auto_scan = true;
         } else if (a == "--yolo") {
-            use_yolo = true;
+            use_yolo = true;   // 默认已开, 保留兼容
         } else if (a == "--no-fallback") {
-            yolo_fallback = false;
+            // 兼容旧参数: 现在本来就没有灯条法兜底了, 保留只为不报错
         } else if (a == "--model" && i + 1 < argc) {
-            yolo_model = argv[++i];
+            const std::string m = argv[++i];
+            // 支持简写, 避免每次写全路径
+            if (m == "v8" || m == "yolov8")       yolo_profile_sel = YOLO_PROFILE_YOLOV8_2CLASS;
+            else if (m == "v11" || m == "yolo11") yolo_profile_sel = YOLO_PROFILE_YOLO11_38CLASS;
+            else if (m == "v5" || m == "yolov5")   yolo_profile_sel = YOLO_PROFILE_YOLOV5_10CLASS;
+            else                                  yolo_profile_sel = -1;  // 自定义路径
         } else if (a == "--conf" && i + 1 < argc) {
             yolo_conf = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "--enemy" && i + 1 < argc) {
@@ -220,21 +225,28 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
 #ifdef HAVE_OPENVINO
     if (use_yolo) {
         try {
-            yolo = std::make_unique<YoloDetector>(yolo_model, yolo_conf, YOLO_NMS_THRESH);
-            LOG("[YOLO] 模型 %s  置信度 %.2f  兜底=%s\n",
-                yolo_model.c_str(), yolo_conf, yolo_fallback ? "开(灯条法)" : "关");
+            YoloProfile prof =
+                (yolo_profile_sel < 0) ? make_yolo_profile(YOLO_PROFILE_SELECT)
+                                       : make_yolo_profile(yolo_profile_sel);
+            yolo = std::make_unique<YoloDetector>(prof, yolo_conf, YOLO_NMS_THRESH);
+            LOG("[YOLO] 模型 %s  输入 %d  类别 %d  置信度 %.2f\n",
+                prof.model_xml.c_str(), prof.input_size, prof.class_num,
+                static_cast<double>(yolo_conf));
         } catch (const std::exception& e) {
-            LOG("[YOLO][ERR] 模型加载失败: %s\n        回退到灯条法\n", e.what());
-            use_yolo = false;
+            // **不再回退灯条法**: 按需求 "全面换成 YOLO", 检测器只有 YOLO 一条路。
+            // 静默回退会让人以为在跑神经网络, 实际在跑灯条法 —— 这种"看不出来的
+            // 降级"是排查时最难发现的一类问题。
+            LOG("[YOLO][ERR] 模型加载失败: %s\n", e.what());
+            LOG("        检测器只有 YOLO 一条路, 没有兜底。请检查模型路径与布局配置。\n");
+            return 1;
         }
     }
 #else
-    if (use_yolo) {
-        LOG("[YOLO][WARN] 这个 build 没有编入 OpenVINO 支持, --yolo 无效。\n"
-            "            请在装了 OpenVINO 的机器上重新 cmake 配置并编译。\n");
-        use_yolo = false;
-    }
-    (void)yolo_fallback;
+    // 检测器只有 YOLO。没有 OpenVINO 就无法工作, 明确失败而不是退回灯条法。
+    LOG("[YOLO][ERR] 这个 build 没有编入 OpenVINO 支持, 无法运行检测。\n"
+        "            请在装了 OpenVINO 的机器上重新 cmake 配置并编译。\n");
+    (void)use_yolo;
+    return 1;
     (void)want_color;
     (void)yolo_conf;
     (void)stat_yolo_boxes;
@@ -418,13 +430,6 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             armors = filter_by_color(yolo_to_armors(boxes), want_color);
             if (!armors.empty()) {
                 det_source = 1;
-            } else if (yolo_fallback) {
-                bars   = extract_lightbars(frame);
-                cv::Mat hsv0, ch0[3];
-                cv::cvtColor(frame, hsv0, cv::COLOR_BGR2HSV);
-                cv::split(hsv0, ch0);
-                armors = filter_by_color(match_armors(bars, ch0[2]), want_color);
-                det_source = 2;
             }
         } else
 #endif

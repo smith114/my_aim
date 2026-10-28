@@ -46,6 +46,9 @@ int main(int argc, char** argv) {
     bool  hold_current = false;
     float hold_yaw = 0.0f, hold_pitch = 0.0f;
     std::string bayer_arg;
+    // 现场扫曝光用。负值表示"用 config.hpp 里的默认值"
+    float exposure_us = -1.0f;
+    float gain_db     = -1.0f;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -62,6 +65,10 @@ int main(int argc, char** argv) {
             frames = std::atoi(argv[++i]);
         } else if (a == "--bayer" && i + 1 < argc) {
             bayer_arg = argv[++i];
+        } else if (a == "--exposure" && i + 1 < argc) {
+            exposure_us = static_cast<float>(std::atof(argv[++i]));
+        } else if (a == "--gain" && i + 1 < argc) {
+            gain_db = static_cast<float>(std::atof(argv[++i]));
         } else if (a == "-v") {
             verbose = true;
         } else if (a == "-h" || a == "--help") {
@@ -69,7 +76,8 @@ int main(int argc, char** argv) {
                          "  detect_probe <图片|视频> [输出图] [--frames N] [-v]\n"
                          "  detect_probe --cam [输出图] [-v]\n"
                          "  detect_probe --cam --hold YAW PITCH [输出图] [-v]\n"
-                         "  detect_probe --cam --hold-current [输出图] [-v]  原地抓帧, 不动云台\n";
+                         "  detect_probe --cam --hold-current [输出图] [-v]  原地抓帧, 不动云台\n"
+                         "  detect_probe --cam --exposure 8000 --gain 16   现场扫曝光(us/dB)\n";
             return 0;
         } else if (!a.empty() && a[0] != '-') {
             if (input.empty() && !use_cam) input = a;
@@ -117,6 +125,10 @@ int main(int argc, char** argv) {
         if (!cam.open()) {
             std::cerr << "[ERR] 相机打不开\n";
             return 1;
+        }
+        // 现场扫曝光: 覆盖 config.hpp 的默认值, 不用重编译
+        if (exposure_us > 0.0f) {
+            cam.apply_exposure(exposure_us, gain_db > 0.0f ? gain_db : srm::CAM_GAIN_DB);
         }
         for (int i = 0; i < 90; ++i) {
             if (cam.read(frame)) break;

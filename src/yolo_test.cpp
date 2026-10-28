@@ -1,4 +1,4 @@
-// yolo_test.cpp: YOLO/OpenVINO 环境自检
+﻿// yolo_test.cpp: YOLO/OpenVINO 环境自检
 //
 // 主流程不依赖 YOLO(用的是全图灯条法), 这个工具只用来确认
 // OpenVINO 与模型文件在目标机器上是可用的, 并输出一张画了框和角点的图。
@@ -12,15 +12,17 @@
 // 注意换模型后输出布局必须一致(38 类 + 4 角点), 否则后处理会静默给出错误框,
 // 详见 config.hpp 的 YOLO_MODEL_XML 说明。
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <opencv2/opencv.hpp>
 
 #include "config.hpp"
+#include "yolo_armor.hpp"
 #include "yolo_detector.hpp"
 
 int main(int argc, char** argv) {
-    std::string model = srm::YOLO_MODEL_XML;
+    srm::YoloProfile prof = srm::make_yolo_profile(YOLO_PROFILE_SELECT);
     std::string input = "yolo_frame0.jpg";
     std::string output = "/tmp/yolo_out.jpg";
     bool have_input = false, have_output = false;
@@ -28,7 +30,11 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--model" && i + 1 < argc) {
-            model = argv[++i];
+            const std::string m = argv[++i];
+            if (m == "v8" || m == "yolov8")       prof = srm::make_yolo_profile(YOLO_PROFILE_YOLOV8_2CLASS);
+            else if (m == "v11" || m == "yolo11") prof = srm::make_yolo_profile(YOLO_PROFILE_YOLO11_38CLASS);
+            else if (m == "v5" || m == "yolov5")   prof = srm::make_yolo_profile(YOLO_PROFILE_YOLOV5_10CLASS);
+            else                                  prof.model_xml = m;
         } else if (!have_input) {
             input = a;
             have_input = true;
@@ -38,8 +44,17 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::cout << "[YOLO] model=" << model << " input=" << input << "\n";
-    srm::YoloDetector det(model, srm::YOLO_CONF_THRESH, srm::YOLO_NMS_THRESH);
+    std::cout << "[YOLO] model=" << prof.model_xml << " input=" << input << "\n";
+    // 模型加载可能失败(路径错/布局不符/IR 版本不兼容), 必须捕获,
+    // 否则整个程序直接 abort, 现场根本看不出是"模型没读到"还是别的。
+    std::unique_ptr<srm::YoloDetector> det;
+    try {
+        det = std::make_unique<srm::YoloDetector>(prof, srm::YOLO_CONF_THRESH,
+                                                  srm::YOLO_NMS_THRESH);
+    } catch (const std::exception& e) {
+        std::cerr << "[YOLO][ERR] 模型加载失败: " << e.what() << "\n";
+        return 1;
+    }
 
     cv::Mat frame;
     if (input.size() > 4 &&
@@ -59,7 +74,7 @@ int main(int argc, char** argv) {
     }
     std::cout << "[YOLO] frame " << frame.cols << "x" << frame.rows << "\n";
 
-    const auto boxes = det.detect(frame);
+    const auto boxes = det->detect(frame);
     std::cout << "[YOLO] boxes=" << boxes.size() << "\n";
     for (const auto& b : boxes) {
         cv::rectangle(frame, b.rect, cv::Scalar(0, 255, 0), 2);
