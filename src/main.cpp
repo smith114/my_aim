@@ -155,17 +155,6 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
     int  max_frames  = 0;
     int  log_every   = 30;   // 日志间隔帧数, --log-every 可改
 
-    // ---- 延迟实测 ----
-    // 只测"软件链路": 采到帧 -> YOLO 推理 -> 解算 -> 组帧 -> 发出。
-    // 量不到的部分: 相机曝光(2ms) + 传输 + **下位机执行**, 后两者要靠落点反推。
-    // 这个数的意义: KF_LATENCY_S 至少要 ≥ 它, 否则预测还没生效就已经过时了。
-    struct LatencyStats {
-        double sum = 0.0, max_v = 0.0;
-        int n = 0;
-        void add(double v) { sum += v; max_v = std::max(max_v, v); ++n; }
-        double mean() const { return n ? sum / n : 0.0; }
-        void reset() { sum = max_v = 0.0; n = 0; }
-    } lat;
     std::string bayer_name_arg;
 
     for (int i = 1; i < argc; ++i) {
@@ -509,7 +498,6 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         // 每帧: 先 predict(dt), 再用当前测量 update(), 最后外推 KF_LATENCY_S。
         // 丢锁时重置 —— 否则上一段轨迹的角速度会被带到新目标上。
         const double kf_now = now_s();
-        const double t_capture = kf_now;   // 本帧到达时刻, 用于测软件延迟
         const float  kf_dt  = static_cast<float>(std::min(kf_now - kf_last_t, 0.2));
         kf_last_t = kf_now;
 
@@ -664,7 +652,6 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
 
         const int32_t fire = (ENABLE_FIRE && tr.locked) ? 1 : 0;
         link.set_target(gimbal.cmd_yaw, gimbal.cmd_pitch, fire);
-        lat.add(now_s() - t_capture);   // 本帧软件链路耗时
 
         // ------------------------------------------------ 可视化
         cv::Mat disp;
@@ -714,7 +701,6 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 theta_yaw, theta_pitch,
                 gimbal.last_want_yaw, gimbal.last_want_pitch,
                 frame_cnt - last_locked_frame,
-                lat.mean() * 1000.0, lat.max_v * 1000.0,   // 距上次成功锁定过了多少帧
                 static_cast<unsigned long long>(link.rx_frames()),
                 static_cast<unsigned long long>(link.resync_drops()),
                 static_cast<unsigned long long>(link.watchdog_trips()));
