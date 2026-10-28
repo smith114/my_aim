@@ -246,8 +246,11 @@ constexpr float KF_MOVING_RATE_DPS = 3.0f;
 // 就填 AIM_YAW_OFFSET_DEG = +1.2, AIM_PITCH_OFFSET_DEG = -0.8。
 //
 // 这是目前**唯一还没标定**的量。它不影响收敛, 只影响最终停在哪。
+// **5 米现场标定值**(2026-10-29 实测: 静止靶 100%, 低速旋转 75%)
 constexpr float AIM_YAW_OFFSET_DEG   = 0.0f;
-constexpr float AIM_PITCH_OFFSET_DEG = 0.0f;
+// 3.7 度 = 枪口在相机下方的安装偏差 + 5m 处重力下坠 253mm 的合成补偿。
+// 这是打中 5 米靶的关键常量, 改动前务必重新打靶验证。
+constexpr float AIM_PITCH_OFFSET_DEG = 3.7f;
 
 constexpr float SERVO_GAIN      = 1.0f;   // 偏差角 -> 需要转过的角度 的比例
 // 单帧**修正量**上限(度)。这是控制律里唯一的限幅, 直接决定"逼近速度":
@@ -261,7 +264,7 @@ constexpr float SERVO_MAX_CORR_DEG = 6.0f;   // 分 4~5 段追上 25 度的大�
 // 20 帧 @ 约 16fps 约 1.2 秒, 足够平缓又不至于明显迟钝。
 constexpr int   SERVO_SOFT_START_FRAMES = 20;
 constexpr float GIMBAL_SMOOTH   = 0.35f;  // 偏差角低通系数
-constexpr float GIMBAL_DEADBAND = 0.5f;   // 死区(度), 消极限环摆动
+constexpr float GIMBAL_DEADBAND = 0.0f;   // 现场定为 0(有 measLP 低通就够, 死区反而影响精度)   // 死区(度), 消极限环摆动
 constexpr float GIMBAL_MANUAL_STEP = 1.5f;// 手动控制步长(度/次)
 
 // 安全包络: 命令角离"启动姿态"最远允许多少度。
