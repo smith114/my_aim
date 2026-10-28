@@ -75,7 +75,8 @@ static void head(cv::Mat& m, int& y, const char* t, const cv::Scalar& col) {
 // ------------------------------------------------------------------ 参数持久化
 // 现场调出来的一组滑条值应该能存下来, 下次直接加载, 不用再试一遍。
 // 纯文本 key=value, 人也能看能改。
-static const char* kCfgPath = "aim_gui.cfg";
+// 中性文件名: my_aim 也读它, 叫 aim_gui 会误导
+static const char* kCfgPath = "aim_params.cfg";
 
 static void save_knobs() {
     std::ofstream f(kCfgPath);

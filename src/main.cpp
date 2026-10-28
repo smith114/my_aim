@@ -360,9 +360,14 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
     // 但 my_aim 只读 config.hpp —— 于是"调好的值"从来没进到真正开火的程序里,
     // 两边各说各话。这里让主程序读同一个文件, 调好即生效。
     //
-    // 优先级: 命令行 > aim_gui.cfg > config.hpp
+    // 优先级: 命令行 > 参数文件 > config.hpp
+    //
+    // 文件名用中性的 aim_params.cfg: 两个程序(my_aim / aim_gui)都读写它,
+    // 叫 aim_gui.cfg 会让人以为只有 GUI 用。旧名仍兼容读取。
     {
-        std::ifstream cf("aim_gui.cfg");
+        std::ifstream cf("aim_params.cfg");
+        const bool from_new_name = static_cast<bool>(cf);
+        if (!cf) cf.open("aim_gui.cfg");
         if (cf) {
             std::string line;
             int applied = 0;
@@ -382,15 +387,10 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 else if (k == "enemy")      { want_color = (v == 2) ? -1 : (v == 1 ? 1 : 0); ++applied; }
                 else if (k == "conf")       { /* 检测器已构造, 见下 */ ++applied; }
             }
-            if (applied > 0) {
-                LOG("[CFG] 已加载 aim_gui.cfg (%d 项): dir=%+.0f/%+.0f gain=%.2f "
-                    "off=%.1f/%.1f smooth=%.2f dbz=%.1f measLP=%.2f\n",
-                    applied,
-                    gimbal.servo_dir_yaw, gimbal.servo_dir_pitch,
-                    gimbal.servo_gain,
-                    gimbal.aim_offset_yaw, gimbal.aim_offset_pitch,
-                    gimbal.smooth_coef, gimbal.deadband, gimbal.meas_lp_coef);
-            }
+            LOG("[CFG] 参数文件 %s 生效, 覆盖 %d 项\n",
+                from_new_name ? "aim_params.cfg" : "aim_gui.cfg(旧名)", applied);
+        } else {
+            LOG("[CFG] 无参数文件, 全部用 config.hpp 的编译期默认值\n");
         }
     }
 
@@ -399,6 +399,37 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
     LOG("[SERVO] 方向符号 yaw=%+.0f pitch=%+.0f%s\n",
         gimbal.servo_dir_yaw, gimbal.servo_dir_pitch,
         (cli_dir_yaw != 0.0f || cli_dir_pitch != 0.0f) ? "  (命令行覆盖)" : "  (config.hpp)");
+
+    // ******** 一次性打印"全部生效值", 作为唯一真相来源 ********
+    //
+    // 配置分散在三处: config.hpp 编译期默认 / 参数文件 / 命令行。
+    // 谁都可能覆盖谁, 现场根本说不清"现在到底用的哪一套"。
+    // 所以启动时把实际生效的值全部打一遍 —— 有这一屏, 就不用猜。
+    LOG("[EFFECTIVE] 本次实际生效的参数\n"
+        "  servo      dir_yaw=%+.0f dir_pitch=%+.0f gain=%.2f\n"
+        "  filter     smooth=%.2f deadband=%.1f deg meas_lp=%.2f\n"
+        "  offset     yaw=%.1f pitch=%.1f deg\n"
+        "  limit      corr<=%.1f deg/frame  pitch_travel[%.1f, %.1f]  envelope=%.0f\n"
+        "  kf         enable=%d latency=%.0f ms q_ang=%.3f q_rate=%.1f r=%.2f\n"
+        "  fire       enable=%d lock_frames=%d tol_frac=%.2f max_dist=%.0f m\n"
+        "  geometry   ARMOR_W=%.0f ARMOR_H=%.0f mm\n"
+        "  detect     enemy=%d  (优先级: 命令行 > 参数文件 > config.hpp)\n",
+        gimbal.servo_dir_yaw, gimbal.servo_dir_pitch, static_cast<double>(gimbal.servo_gain),
+        static_cast<double>(gimbal.smooth_coef), static_cast<double>(gimbal.deadband),
+        static_cast<double>(gimbal.meas_lp_coef),
+        static_cast<double>(gimbal.aim_offset_yaw),
+        static_cast<double>(gimbal.aim_offset_pitch),
+        static_cast<double>(SERVO_MAX_CORR_DEG),
+        static_cast<double>(GIMBAL_PITCH_MIN + GIMBAL_PITCH_MARGIN),
+        static_cast<double>(GIMBAL_PITCH_MAX - GIMBAL_PITCH_MARGIN),
+        static_cast<double>(GIMBAL_ENVELOPE_DEG),
+        KF_ENABLE ? 1 : 0, static_cast<double>(KF_LATENCY_S) * 1000.0,
+        static_cast<double>(KF_Q_ANGLE), static_cast<double>(KF_Q_RATE),
+        static_cast<double>(KF_R_ANGLE),
+        (ENABLE_FIRE || cli_enable_fire) ? 1 : 0, FIRE_LOCK_FRAMES,
+        static_cast<double>(FIRE_TOL_FRAC), static_cast<double>(FIRE_MAX_DIST_M),
+        static_cast<double>(ARMOR_W), static_cast<double>(ARMOR_H),
+        want_color);
 
     // mock 模式没有下位机回传, 用"命令角即真实角"的假设把闭环跑起来,
     // 这样可以纯离线验证 检测->解算->跟踪->伺服 整条链路的逻辑。
