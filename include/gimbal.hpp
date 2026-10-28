@@ -167,6 +167,10 @@ public:
         // 重新冻结 home。这样每次重新开始跟, 锚点都是操作手刚摆好的方向。
         // 跟踪过程中的短暂掉帧不会触发(那时 lost_cnt_ 很小), 不影响连续性。
         if (home_locked_ && lost_cnt_ > kRecenterAfter) {
+            // 新一轮跟踪: 清掉上一次会话遗留的发散状态与计数
+            diverged_    = false;
+            grow_streak_ = 0;
+            last_mag_    = 0.0f;
             home_frozen_yaw   = meas_yaw;
             home_frozen_pitch = clamp_val(meas_pitch, pitch_lo(), pitch_hi());
             std::printf("[GIMBAL] 重新锚定包络中心 home=%.2f/%.2f (中断 %d 帧)\n",
@@ -199,9 +203,19 @@ public:
         // 这里监测"|theta| 是否连续多帧单调变大", 一旦确认就停止推进并报错,
         // 让操作者看到明确的失败而不是云台自己乱转。
         const float mag = std::fabs(ty);
+        const float prev_mag = last_mag_;   // 必须先存: 下面要用"上一帧"的值比较
         if (mag > last_mag_ + 0.3f) ++grow_streak_;
         else if (mag < last_mag_)   grow_streak_ = 0;
         last_mag_ = mag;
+        // **** 解除条件: |theta| 开始变小就认为恢复了 ****
+        // 原来 diverged_ 一旦置 true 就再没有任何地方清它, 等于一次发散
+        // 让跟踪永久失效, 只能重启进程。实测表现为"云台像被限制住, 想回正也回不了"。
+        // 用 prev_mag: last_mag_ 刚刚被覆盖成 mag, 拿它比恒不成立
+        if (diverged_ && mag < prev_mag - 0.2f) {
+            diverged_ = false;
+            grow_streak_ = 0;
+            std::printf("[GIMBAL] 发散解除, 恢复跟踪\n");
+        }
         if (grow_streak_ >= kDivergeFrames) {
             if (!diverged_) {
                 std::printf("[GIMBAL][ERR] 偏角连续 %d 帧增大(%.2f->%.2f), 判定为发散,"
