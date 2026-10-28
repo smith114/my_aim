@@ -743,15 +743,23 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             LOG("[DET] f=%d bars=%.1f armor=%.1f solved=%.1f locked=%.1f state=%s "
                 "want=%.1f/%.1f cmd=%.1f/%.1f fb=%.1f/%.1f home=%.1f/%.1f mode=%d th=%.1f/%.1f "
                 "lock_age=%d rx=%llu resync=%llu wd=%llu\n",
-                frame_cnt, stat_bars / static_cast<double>(log_every),
-                stat_armor / static_cast<double>(log_every),
-                stat_solved / static_cast<double>(log_every),
-                stat_locked / static_cast<double>(log_every), tracker.state_name(), gimbal.cmd_yaw, gimbal.cmd_pitch,
-                s.valid ? s.yaw : 0.0f, s.valid ? s.pitch : 0.0f,
-                gimbal.effective_home_yaw(), gimbal.effective_home_pitch(),
-                s.valid ? s.mode : -1,
-                theta_yaw, theta_pitch,
-                gimbal.last_want_yaw, gimbal.last_want_pitch,
+                // ---- 参数顺序必须与格式串逐项一致 ----
+                // 这里错位过三次: 格式串是 want/cmd/fb/home/mode/th, 实参却按
+                // cmd/fb/home/mode/th/want 排 -> 整体错两位; 更糟的是 int 的 mode
+                // 被塞进 %.1f, varargs 从那里起全崩(打出 -20.0 这种假值)。
+                // 教训: 格式串与实参紧挨着写, 顺序标在注释里, 不再插别的东西。
+                frame_cnt,                                    // f
+                stat_bars   / static_cast<double>(log_every),  // bars
+                stat_armor  / static_cast<double>(log_every),  // armor
+                stat_solved / static_cast<double>(log_every),  // solved
+                stat_locked / static_cast<double>(log_every),  // locked
+                tracker.state_name(),                          // state
+                gimbal.last_want_yaw,         gimbal.last_want_pitch,        // want
+                gimbal.cmd_yaw,               gimbal.cmd_pitch,              // cmd
+                s.valid ? s.yaw : 0.0f,       s.valid ? s.pitch : 0.0f,      // fb
+                gimbal.effective_home_yaw(),  gimbal.effective_home_pitch(), // home
+                s.valid ? s.mode : -1,                         // mode (int!)
+                theta_yaw,                    theta_pitch,                   // th
                 frame_cnt - last_locked_frame,
                 static_cast<unsigned long long>(link.rx_frames()),
                 static_cast<unsigned long long>(link.resync_drops()),

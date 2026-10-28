@@ -75,7 +75,8 @@ public:
     float meas_lp_yaw     = 0.0f;
     float meas_lp_pitch   = 0.0f;
     bool  meas_lp_inited_ = false;
-    float meas_lp_coef    = 0.25f;   // 越小越平滑, 但跟随真实运动的滞后越大
+    // 0.10 是现场试出来的合理区间(8~14)。再小跟随滞后明显, 再大止不住抖。
+    float meas_lp_coef    = 0.10f;
 
     float last_want_yaw   = 0.0f;
     float last_want_pitch = 0.0f;

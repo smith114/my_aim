@@ -25,6 +25,8 @@
 #include <opencv2/opencv.hpp>
 #include <unistd.h>
 
+#include <fstream>
+
 #include "config.hpp"
 #include "fire.hpp"
 #include "kf.hpp"
@@ -55,7 +57,7 @@ static int tb_dir_yaw   = 0;     // 默认 -1
 static int tb_dir_pitch = 0;     // 默认 -1
 static int tb_smooth    = 35;    // /100, 低通系数
 static int tb_deadband  = 5;     // /10 -> 度
-static int tb_measlp    = 25;    // /100, 实测角低通
+static int tb_measlp    = 10;    // /100, 实测角低通(8~14 是合理区间)
 
 static void row(cv::Mat& m, int& y, const char* k, const std::string& v,
                 const cv::Scalar& col) {
@@ -69,6 +71,52 @@ static void head(cv::Mat& m, int& y, const char* t, const cv::Scalar& col) {
     cv::line(m, cv::Point(14, y + 6), cv::Point(400, y + 6), col, 1);
     y += 26;
 }
+
+// ------------------------------------------------------------------ 参数持久化
+// 现场调出来的一组滑条值应该能存下来, 下次直接加载, 不用再试一遍。
+// 纯文本 key=value, 人也能看能改。
+static const char* kCfgPath = "aim_gui.cfg";
+
+static void save_knobs() {
+    std::ofstream f(kCfgPath);
+    if (!f) { std::printf("[ERR] 无法写 %s\n", kCfgPath); return; }
+    f << "conf="      << tb_conf      << "\n"
+      << "enemy="     << tb_enemy     << "\n"
+      << "off_yaw="   << tb_off_yaw   << "\n"
+      << "off_pitch=" << tb_off_pitch << "\n"
+      << "latency="   << tb_lat_ms    << "\n"
+      << "gain="      << tb_gain      << "\n"
+      << "dir_yaw="   << tb_dir_yaw   << "\n"
+      << "dir_pitch=" << tb_dir_pitch << "\n"
+      << "smooth="    << tb_smooth    << "\n"
+      << "deadband="  << tb_deadband  << "\n"
+      << "meas_lp="   << tb_measlp    << "\n";
+    std::printf("[CFG] 已保存到 %s\n", kCfgPath);
+}
+static void load_knobs() {
+    std::ifstream f(kCfgPath);
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string k = line.substr(0, eq);
+        const int v = std::atoi(line.c_str() + eq + 1);
+        if      (k == "conf")      tb_conf      = v;
+        else if (k == "enemy")     tb_enemy     = v;
+        else if (k == "off_yaw")   tb_off_yaw   = v;
+        else if (k == "off_pitch") tb_off_pitch = v;
+        else if (k == "latency")   tb_lat_ms    = v;
+        else if (k == "gain")      tb_gain      = v;
+        else if (k == "dir_yaw")   tb_dir_yaw   = v;
+        else if (k == "dir_pitch") tb_dir_pitch = v;
+        else if (k == "smooth")    tb_smooth    = v;
+        else if (k == "deadband")  tb_deadband  = v;
+        else if (k == "meas_lp")   tb_measlp    = v;
+    }
+    std::printf("[CFG] 已从 %s 加载\n", kCfgPath);
+}
+
 
 int main(int argc, char** argv) {
     bool use_cam = true;
@@ -145,6 +193,7 @@ int main(int argc, char** argv) {
     cv::createTrackbar("smooth x100",     kW3, &tb_smooth,   100);
     cv::createTrackbar("deadband x10",    kW3, &tb_deadband, 50);
     cv::createTrackbar("measLP x100",     kW3, &tb_measlp,   100);
+    load_knobs();   // 加载上次保存的值(没有文件就跳过)
 
     double last_t = 0.0;
 
@@ -463,7 +512,7 @@ int main(int argc, char** argv) {
 
         // knobs 窗口本身只放滑条(OpenCV 会自己画), 这里补一句提示
         {
-            static cv::Mat hint(120, 420, CV_8UC3, cv::Scalar(26, 26, 26));
+            static cv::Mat hint(140, 420, CV_8UC3, cv::Scalar(26, 26, 26));
             static bool once = false;
             if (!once) {
                 int hy = 24;
@@ -479,6 +528,9 @@ int main(int argc, char** argv) {
                 cv::putText(hint, "latency: KF predict horizon", cv::Point(12, hy),
                             cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(190, 190, 190), 1);
                 hy += 20;
+                cv::putText(hint, "s=save cfg  r=reload  q=quit", cv::Point(12, hy),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(120, 190, 255), 1);
+                hy += 20;
                 cv::putText(hint, "gain: servo gain", cv::Point(12, hy),
                             cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(190, 190, 190), 1);
                 cv::imshow(kW3, hint);
@@ -488,6 +540,8 @@ int main(int argc, char** argv) {
 
         const int k = cv::waitKey(1);
         if (k == 27 || k == 'q') break;
+        if (k == 's') save_knobs();
+        if (k == 'r') load_knobs();
     }
 
     link.stop();
