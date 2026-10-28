@@ -670,7 +670,13 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         // 不允许存在"测试一套、实车另一套"。
         static int fire_lock_streak = 0;
         const float f_dist  = (follow >= 0) ? candidates[follow].solve.dist : 0.0f;
-        const float f_speed = fb.has_bullet_speed ? fb.bullet_speed : last_bullet_speed;
+        // 弹速: 裁判系统没接时回传 0。**不能因此拒绝开火** ——
+        // 实测(10-28) bullet_spd=0.00, 于是 fire_decision 里的
+        //   "bullet_speed > FIRE_MIN_BULLET_SPEED" 永远不成立, fire_flag 恒为 0。
+        // 弹速只在弹道补偿里用, 而补偿现在是关的(改用 5m 现场标定的俯仰常值),
+        // 所以回退到 BULLET_SPEED_DEFAULT 即可, 不影响瞄准。
+        float f_speed = fb.has_bullet_speed ? fb.bullet_speed : last_bullet_speed;
+        if (!(f_speed > FIRE_MIN_BULLET_SPEED)) f_speed = BULLET_SPEED_DEFAULT;
         const bool  f_prev  = (fire_lock_streak >= FIRE_LOCK_FRAMES);
         const bool  fire_ok = fire_decision(
             (ENABLE_FIRE || cli_enable_fire), tr.locked, vision_on, fb_fresh,
