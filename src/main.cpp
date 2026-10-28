@@ -365,9 +365,12 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
     // 文件名用中性的 aim_params.cfg: 两个程序(my_aim / aim_gui)都读写它,
     // 叫 aim_gui.cfg 会让人以为只有 GUI 用。旧名仍兼容读取。
     {
+        // **不再兼容 aim_gui.cfg(旧名)**。
+        // 理由: 旧文件的 off_* 编码是 0=零度, 新编码是 100=零度。读旧文件会把
+        // "偏移 0" 解释成 -10 度, 这是个静默的错误 —— 现场调一晚上才发现准星
+        // 偏了 10 度, 而且很难想到原因。与其做兼容, 不如只认一个文件名,
+        // 旧文件直接删掉重存。
         std::ifstream cf("aim_params.cfg");
-        const bool from_new_name = static_cast<bool>(cf);
-        if (!cf) cf.open("aim_gui.cfg");
         if (cf) {
             std::string line;
             int applied = 0;
@@ -387,8 +390,7 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 else if (k == "enemy")      { want_color = (v == 2) ? -1 : (v == 1 ? 1 : 0); ++applied; }
                 else if (k == "conf")       { /* 检测器已构造, 见下 */ ++applied; }
             }
-            LOG("[CFG] 参数文件 %s 生效, 覆盖 %d 项\n",
-                from_new_name ? "aim_params.cfg" : "aim_gui.cfg(旧名)", applied);
+            LOG("[CFG] aim_params.cfg 生效, 覆盖 %d 项\n", applied);
         } else {
             LOG("[CFG] 无参数文件, 全部用 config.hpp 的编译期默认值\n");
         }
