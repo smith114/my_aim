@@ -228,6 +228,32 @@ int main(int argc, char** argv) {
             for (const auto& p : armors[i].pts)
                 poly.push_back(cv::Point(cvRound(p.x), cvRound(p.y)));
             if (poly.size() == 4) cv::polylines(view, poly, true, col, sel ? 2 : 1);
+            // ---- 角点逐个标注: 判断这四个点是不是**整块板的四角** ----
+            // 实测现象(10-28): 框只覆盖左灯条, 十字却对准"框中心且 theta≈0"。
+            // 说明闭环忠实工作, 但 PnP 用的四点不是板四角 -> 中心必然偏。
+            // 按下标 j 用不同颜色画出, 一眼能看出顺序/位置是否合理:
+            // 正常的装甲板四角应构成一个近似矩形, 覆盖两条灯条之间的整块板。
+            for (size_t j = 0; j < armors[i].pts.size(); ++j) {
+                const cv::Point pt(cvRound(armors[i].pts[j].x), cvRound(armors[i].pts[j].y));
+                static const cv::Scalar kCp[4] = {
+                    cv::Scalar(0, 0, 255),    // 0 红
+                    cv::Scalar(0, 255, 0),    // 1 绿
+                    cv::Scalar(255, 0, 0),    // 2 蓝
+                    cv::Scalar(0, 255, 255)   // 3 黄
+                };
+                cv::circle(view, pt, 4, kCp[j % 4], -1);
+                cv::putText(view, std::to_string(j), pt + cv::Point(6, -4),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.55, kCp[j % 4], 2, cv::LINE_AA);
+            }
+            // 画出这四个点的外接中心, 与光轴十字对比
+            if (!armors[i].pts.empty()) {
+                cv::Point2f mc(0, 0);
+                for (const auto& q : armors[i].pts) mc += q;
+                mc.x /= static_cast<float>(armors[i].pts.size());
+                mc.y /= static_cast<float>(armors[i].pts.size());
+                cv::drawMarker(view, cv::Point(cvRound(mc.x), cvRound(mc.y)),
+                               cv::Scalar(255, 0, 255), cv::MARKER_CROSS, 14, 2);
+            }
             if (i < cand.size()) {
                 char b[96];
                 std::snprintf(b, sizeof(b), "y%.1f p%.1f d%.2f",
