@@ -96,7 +96,7 @@ public:
             if (++home_cnt_ >= HOME_STABLE_FRAMES) {
                 home_locked_ = true;
                 home_frozen_yaw   = home_yaw;
-                home_frozen_pitch = home_pitch;
+                home_frozen_pitch = clamp_val(home_pitch, pitch_lo(), pitch_hi());
                 std::printf("[GIMBAL] 启动姿态锁定 home=%.2f/%.2f\n", home_yaw, home_pitch);
             }
         }
@@ -129,7 +129,7 @@ public:
         if (!home_locked_) {
             home_locked_ = true;
             home_frozen_yaw   = home_yaw;
-            home_frozen_pitch = home_pitch;
+            home_frozen_pitch = clamp_val(home_pitch, pitch_lo(), pitch_hi());
             std::printf("[GIMBAL] 开始跟踪, 冻结包络中心 home=%.2f/%.2f\n",
                         static_cast<double>(home_yaw), static_cast<double>(home_pitch));
         }

@@ -273,8 +273,11 @@ int main(int argc, char** argv) {
             row(pnl, y, "fb (now)", b, GR);
             std::snprintf(b, sizeof(b), "%.2f", static_cast<double>(fb.roll));
             row(pnl, y, "roll", b, GR);
+            // mode 必须显眼: mode=0 时下位机忽略一切角度指令, 那时"云台不动"
+            // 是正确行为, 不是 bug。以前它只是灰字里的一行, 很容易看漏。
             row(pnl, y, "mode", std::to_string(fb.mode) +
-                             (vis ? "  VISION ON" : "  vision off"), vis ? GN : GY);
+                             (vis ? "  VISION ON" : "  ** OFF - enable via RC **"),
+                vis ? GN : cv::Scalar(80, 80, 255));
             std::snprintf(b, sizeof(b), "%.2f m/s", static_cast<double>(fb.bullet_speed));
             row(pnl, y, "bullet_spd", b, GR);
             std::snprintf(b, sizeof(b), "%.1f ms%s", fb.age() * 1000.0,
@@ -296,6 +299,14 @@ int main(int argc, char** argv) {
         std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(th_y),
                       static_cast<double>(th_p));
         row(pnl, y, "after KF", b, GY);
+        std::snprintf(b, sizeof(b), "%.2f m", static_cast<double>(dist));
+        row(pnl, y, "dist", b, OR);
+        {
+            std::snprintf(b, sizeof(b), "%.1f / %.1f deg",
+                          static_cast<double>(plate_angular_width_deg(dist)),
+                          static_cast<double>(fire_tolerance_deg(dist)));
+            row(pnl, y, "plate/tol", b, OR);
+        }
         {   // 18 字节原始报文: 协议层出问题时直接看这个, 不用再加调试打印
             if (gimbal.have_meas) {
                 const auto pkt = pack_tx(gimbal.cmd_yaw, gimbal.cmd_pitch, fire);
