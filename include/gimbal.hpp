@@ -154,6 +154,26 @@ public:
             sm_yaw_   = 0.0f;
             sm_pitch_ = 0.0f;
         }
+        // ******** 长时间中断后重新锚定包络中心 ********
+        //
+        // 操作手的真实流程是「手对好方向 -> 开自瞄 -> 开始跟」。而 home 原来是
+        // **只在启动时冻结一次**, 于是:
+        //   启动时对着靶标      -> 好
+        //   手动复位改了方向    -> 靶标跑到旧 home ± 30 度之外
+        //                        -> 命令被夹住, 云台永远到不了靶标
+        // 实测(10-28)就是这么"一开始好好的, 复位之后就不行了"。
+        //
+        // 所以: 中断超过 kRecenterAfter 帧后再次跟踪时, 用**当前实测姿态**
+        // 重新冻结 home。这样每次重新开始跟, 锚点都是操作手刚摆好的方向。
+        // 跟踪过程中的短暂掉帧不会触发(那时 lost_cnt_ 很小), 不影响连续性。
+        if (home_locked_ && lost_cnt_ > kRecenterAfter) {
+            home_frozen_yaw   = meas_yaw;
+            home_frozen_pitch = clamp_val(meas_pitch, pitch_lo(), pitch_hi());
+            std::printf("[GIMBAL] 重新锚定包络中心 home=%.2f/%.2f (中断 %d 帧)\n",
+                        static_cast<double>(home_frozen_yaw),
+                        static_cast<double>(home_frozen_pitch), lost_cnt_);
+        }
+
         gap_cnt_ = 0;
         lost_cnt_ = 0;
 
