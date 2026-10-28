@@ -46,8 +46,11 @@ static const char* kSerialById = "/dev/serial/by-id/usb-YueLuEmbedded_Vision_Com
 
 static int tb_conf      = 45;    // /100
 static int tb_enemy     = 0;     // 0=blue 1=red 2=both
-static int tb_off_yaw   = 0;     // /10 deg
-static int tb_off_pitch = 0;
+// ******** off 系列必须有负值 ********
+// 安装偏差可正可负, 原来滑条 0..100 映射成 0..10 度没有负值, 等于只能往一边调。
+// 改成 0..200, 中心 100 表示 0 度 -> 实际范围 -10.0 ~ +10.0 度。
+static int tb_off_yaw   = 100;   // (v-100)/10 deg -> -10..+10
+static int tb_off_pitch = 100;   // (v-100)/10 deg -> -10..+10
 static int tb_lat_ms    = 80;
 static int tb_gain      = 100;   // /100
 // 伺服方向符号, 0 -> -1, 1 -> +1。**做成滑条而不是常量**:
@@ -185,8 +188,8 @@ int main(int argc, char** argv) {
     cv::resizeWindow(kW3, 440, 430);
     cv::createTrackbar("conf x100",      kW3, &tb_conf,      95);
     cv::createTrackbar("enemy 0B 1R 2all", kW3, &tb_enemy,   2);
-    cv::createTrackbar("off yaw x10",    kW3, &tb_off_yaw,   100);
-    cv::createTrackbar("off pitch x10",  kW3, &tb_off_pitch, 100);
+    cv::createTrackbar("off yaw  (x10, 100=0)",   kW3, &tb_off_yaw,   200);
+    cv::createTrackbar("off pitch (x10, 100=0)",  kW3, &tb_off_pitch, 200);
     cv::createTrackbar("latency ms",     kW3, &tb_lat_ms,    300);
     cv::createTrackbar("gain x100",      kW3, &tb_gain,      200);
     cv::createTrackbar("dirYaw 0=-1 1=+1", kW3, &tb_dir_yaw,   1);
@@ -243,8 +246,8 @@ int main(int argc, char** argv) {
         gimbal.smooth_coef      = static_cast<float>(tb_smooth) / 100.0f;
         gimbal.deadband         = static_cast<float>(tb_deadband) / 10.0f;
         gimbal.servo_gain       = static_cast<float>(tb_gain) / 100.0f;
-        gimbal.aim_offset_yaw   = static_cast<float>(tb_off_yaw) / 10.0f;
-        gimbal.aim_offset_pitch = static_cast<float>(tb_off_pitch) / 10.0f;
+        gimbal.aim_offset_yaw   = static_cast<float>(tb_off_yaw   - 100) / 10.0f;
+        gimbal.aim_offset_pitch = static_cast<float>(tb_off_pitch - 100) / 10.0f;
 
         float th_y = 0.0f, th_p = 0.0f, dist = 0.0f;
         float raw_y = 0.0f, raw_p = 0.0f;   // 滤波前的原始测量, 用于对照

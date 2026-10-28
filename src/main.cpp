@@ -379,8 +379,8 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 if      (k == "dir_yaw")    { gimbal.servo_dir_yaw   = (v == 0) ? -1.0f : 1.0f; ++applied; }
                 else if (k == "dir_pitch")  { gimbal.servo_dir_pitch = (v == 0) ? -1.0f : 1.0f; ++applied; }
                 else if (k == "gain")       { gimbal.servo_gain      = static_cast<float>(v) / 100.0f; ++applied; }
-                else if (k == "off_yaw")    { gimbal.aim_offset_yaw   = static_cast<float>(v) / 10.0f; ++applied; }
-                else if (k == "off_pitch")  { gimbal.aim_offset_pitch = static_cast<float>(v) / 10.0f; ++applied; }
+                else if (k == "off_yaw")    { gimbal.aim_offset_yaw   = static_cast<float>(v - 100) / 10.0f; ++applied; }
+                else if (k == "off_pitch")  { gimbal.aim_offset_pitch = static_cast<float>(v - 100) / 10.0f; ++applied; }
                 else if (k == "smooth")     { gimbal.smooth_coef     = static_cast<float>(v) / 100.0f; ++applied; }
                 else if (k == "deadband")   { gimbal.deadband        = static_cast<float>(v) / 10.0f; ++applied; }
                 else if (k == "meas_lp")    { gimbal.meas_lp_coef    = static_cast<float>(v) / 100.0f; ++applied; }
