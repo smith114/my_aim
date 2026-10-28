@@ -299,6 +299,34 @@ int main(int argc, char** argv) {
         std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(th_y),
                       static_cast<double>(th_p));
         row(pnl, y, "after KF", b, GY);
+
+        // ---- 交叉校验: 用像素位置直接算偏角, 和 PnP 的结果对照 ----
+        //
+        // 这两者**必须一致**。它们走的是完全不同的路径:
+        //   pixel: 板的检测中心 + 内参, 一步 atan2
+        //   PnP  : 四个角点 -> solvePnP -> tvec -> atan2
+        // 若差很多, 说明 PnP 链路有问题(角点顺序/内参/相机系约定),
+        // 那闭环追的就是一个虚构角度, 云台必然对不上板、上下乱跑。
+        if (follow >= 0 && follow < static_cast<int>(cand.size())) {
+            const float cxp = cand[follow].center.x;
+            const float cyp = cand[follow].center.y;
+            const float py_y = static_cast<float>(
+                std::atan2(static_cast<double>(cxp - CAM_CX),
+                           static_cast<double>(CAM_FX)) * 57.29578);
+            const float py_p = static_cast<float>(
+                std::atan2(static_cast<double>(cyp - CAM_CY),
+                           static_cast<double>(CAM_FY)) * 57.29578);
+            std::snprintf(b, sizeof(b), "%.2f / %.2f", static_cast<double>(py_y),
+                          static_cast<double>(py_p));
+            const float d_y = std::fabs(py_y - raw_y);
+            const float d_p = std::fabs(py_p - raw_p);
+            const bool bad = (d_y > 2.0f || d_p > 2.0f);
+            row(pnl, y, "pixel th", b, bad ? cv::Scalar(80, 80, 255) : GY);
+            std::snprintf(b, sizeof(b), "%.2f / %.2f  %s", static_cast<double>(d_y),
+                          static_cast<double>(d_p),
+                          bad ? "** MISMATCH - PnP suspect **" : "match");
+            row(pnl, y, "pnp-pixel", b, bad ? cv::Scalar(80, 80, 255) : GN);
+        }
         std::snprintf(b, sizeof(b), "%.2f m", static_cast<double>(dist));
         row(pnl, y, "dist", b, OR);
         {

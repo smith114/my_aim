@@ -248,9 +248,30 @@ public:
         // 而实测是 -62.4/2.4 —— pitch 差 40 度。mode=0 时下位机忽略所以看不出来,
         // 但操作手一开自瞄, 下位机立刻执行这个陈旧命令, 云台会突然抬/低头 40 度。
         // "没有目标" 的正确含义是"**停在现在这里**", 不是"继续去上次那个点"。
+        // 没目标时的处理. 两个考虑互相冲突, 取折中:
+        //
+        //   1) **不能停在漂走的位置**。实测(10-28): 某次跟踪把 pitch 推到 -35
+        //      (顶在机械下限=最大抬头), 之后没目标 -> 老代码把 cmd 设成实测,
+        //      于是云台永远对着天花板, 再也看不到靶标, 死锁。
+        //   2) **也不能瞬间弹回启动姿态**。跟踪中途偶发丢一两帧就猛跳, 观感极差。
+        //
+        // 所以: 朝**冻结的启动姿态**缓慢回, 速率 GIMBAL_RECENTER_DPS。
+        // 启动姿态是操作手开自瞄前手动对好的方向, 回到那里最有意义。
         if (have_meas) {
-            cmd_yaw   = meas_yaw;
-            cmd_pitch = meas_pitch;
+            if (home_locked_) {
+                // 沿 yaw 走最短路径, pitch 直接朝目标走
+                float dy = home_frozen_yaw - cmd_yaw;
+                while (dy >  180.0f) dy -= 360.0f;
+                while (dy < -180.0f) dy += 360.0f;
+                const float max_step = GIMBAL_RECENTER_DPS * 0.02f;   // 约 50Hz 一帧
+                const float dp = home_frozen_pitch - cmd_pitch;
+                cmd_yaw   = wrap360(cmd_yaw + clamp_val(dy, -max_step, max_step));
+                cmd_pitch = clamp_val(cmd_pitch + clamp_val(dp, -max_step, max_step),
+                                      pitch_lo(), pitch_hi());
+            } else {
+                cmd_yaw   = meas_yaw;
+                cmd_pitch = meas_pitch;
+            }
         }
         // **不要立刻清软启动计数**。
         //
