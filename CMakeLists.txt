@@ -38,6 +38,22 @@ endif()
 # 留一点余量取 0.6: 允许斜视时板变窄, 但不允许"高比宽大 4 倍"的怪形状。
 add_compile_definitions(PAIR_ASPECT_MIN=0.6f)
 
+# ---- Eigen: 同济 EKF 与坐标系适配层需要 ----
+# 系统装在 /usr/include/eigen3, 但默认不在搜索路径里; 全局加一次,
+# 避免每个 target 单独处理(踩过: main 包含 srm_to_tongji.hpp 时找不到 Eigen/Dense)
+find_package(Eigen3 QUIET)
+if(Eigen3_FOUND)
+  set(EIGEN_INCLUDE_DIR ${EIGEN3_INCLUDE_DIR})
+else()
+  find_path(EIGEN_INCLUDE_DIR Eigen/Dense PATHS /usr/include/eigen3 /usr/local/include/eigen3)
+endif()
+if(EIGEN_INCLUDE_DIR)
+  include_directories(${EIGEN_INCLUDE_DIR})
+  message(STATUS "Eigen: ${EIGEN_INCLUDE_DIR}")
+else()
+  message(WARNING "Eigen: 未找到, 同济 EKF 不会被编入")
+endif()
+
 find_package(OpenCV REQUIRED)
 find_package(Threads REQUIRED)
 
