@@ -171,9 +171,12 @@ public:
         //   |theta| 小 -> 修正小 -> 慢慢贴上去, 不过冲
         //   |theta| 大 -> 修正被限在 8 度 -> 分段逼近, 不会一次猛甩 30 度
         // 结构上**不可能累积**: 命令永远只比实测角大有限的一点点。
-        const float cy = clamp_val(servo_dir_yaw   * ty * SERVO_GAIN * ramp,
+        // 减掉安装偏差: 修正量只针对"真正的瞄准误差", 不含相机与云台的固定错位。
+        const float ty_aim = ty - AIM_YAW_OFFSET_DEG;
+        const float tp_aim = tp - AIM_PITCH_OFFSET_DEG;
+        const float cy = clamp_val(servo_dir_yaw   * ty_aim * SERVO_GAIN * ramp,
                                    -SERVO_MAX_CORR_DEG, SERVO_MAX_CORR_DEG);
-        const float cp = clamp_val(servo_dir_pitch * tp * SERVO_GAIN * ramp,
+        const float cp = clamp_val(servo_dir_pitch * tp_aim * SERVO_GAIN * ramp,
                                    -SERVO_MAX_CORR_DEG, SERVO_MAX_CORR_DEG);
 
         last_want_yaw   = meas_yaw   + cy;
