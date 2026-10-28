@@ -145,6 +145,27 @@ else()
   message(WARNING "servo_calib 需要 OpenVINO, 未编入")
 endif()
 
+# ---------------------------------------------------------------- 同济 EKF (旋转目标)
+# 直接用同济 sp_vision_25 的 11 维 EKF 目标模型, 而不是自己重写:
+#   · 它把"四块板中的哪一块"建进观测模型(h_armor_xyz 依赖 id 与 armor_num)
+#   · 状态含轴心/速度/相位/转速/半径/L 形偏移
+#   · 这是旋转装甲板(小陀螺)的标准解法, 经过比赛验证
+find_package(Eigen3 QUIET)
+if(Eigen3_FOUND OR EXISTS "/usr/include/eigen3/Eigen/Dense")
+  add_library(tongji_ekf STATIC include/tongji/target.cpp include/tongji/math_tools.cpp)
+  target_include_directories(tongji_ekf PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/tongji)
+  if(Eigen3_FOUND)
+    target_link_libraries(tongji_ekf PUBLIC Eigen3::Eigen)
+  else()
+    target_include_directories(tongji_ekf PUBLIC /usr/include/eigen3)
+  endif()
+  target_include_directories(tongji_ekf PUBLIC /usr/include/opencv4)
+  message(STATUS "同济 EKF: 已编入 (tongji_ekf)")
+else()
+  message(WARNING "同济 EKF: 找不到 Eigen, 未编入")
+endif()
+
 # ---------------------------------------------------------------- 标定工具
 add_executable(calibrate src/calibrate.cpp)
 aim_link(calibrate)
