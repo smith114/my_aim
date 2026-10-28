@@ -668,7 +668,7 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 static int warn_cnt = 0;
                 if (++warn_cnt % 900 == 1) {
                     LOG("[MODE][WARN] 检出装甲板但 mode=%d, 指令被忽略, 云台不会跟随。"
-                        "请在车上按鼠标右键进入视觉控制模式。\n", fb.mode);
+                        "请用**遥控器**打开自瞄模式。\n", fb.mode);
                 }
             } else {
                 LOG("[WARN] 回传数据过期(%.3fs), 云台冻结\n", fb.age());
@@ -781,7 +781,7 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 stat_solved / static_cast<double>(log_every),
                 stat_locked / static_cast<double>(log_every), tracker.state_name(), gimbal.cmd_yaw, gimbal.cmd_pitch,
                 s.valid ? s.yaw : 0.0f, s.valid ? s.pitch : 0.0f,
-                gimbal.home_yaw, gimbal.home_pitch,
+                gimbal.effective_home_yaw(), gimbal.effective_home_pitch(),
                 s.valid ? s.mode : -1,
                 theta_yaw, theta_pitch,
                 gimbal.last_want_yaw, gimbal.last_want_pitch,
@@ -793,7 +793,7 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             // 表现为"检测锁定正常、命令也在发, 但云台一动不动"
             if (s.valid && s.mode != 1) {
                 LOG("[WARN] 下位机 mode=%d 不是 1, 视觉控制未开启 -> 云台不会跟随!\n"
-                     "       请在车上按鼠标右键进入视觉控制模式\n", s.mode);
+                     "       请用遥控器打开自瞄模式\n", s.mode);
             }
             stat_bars = stat_armor = stat_solved = stat_locked = 0;
         }

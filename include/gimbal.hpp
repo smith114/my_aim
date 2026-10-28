@@ -95,6 +95,15 @@ public:
 
     bool home_stable() const { return home_locked_; }
 
+    // 包络**实际使用**的中心。日志必须打这个, 否则操作手看到的 home=0.0
+    // 会以为包络中心是 0(实测踩过: 旧字段 home_yaw 永远 0, 看着像 bug)。
+    float effective_home_yaw() const {
+        return home_locked_ ? home_frozen_yaw : home_yaw;
+    }
+    float effective_home_pitch() const {
+        return home_locked_ ? home_frozen_pitch : home_pitch;
+    }
+
     // 一帧跟踪: 输入相机系偏差角(度, +yaw = 目标偏右, +pitch = 目标偏下)
     // 返回是否产生了新的命令
     bool track(float theta_yaw, float theta_pitch) {
@@ -224,6 +233,16 @@ public:
 
     void stop_tracking() {
         tracking = false;
+        // **把命令角收回到当前实测姿态**。
+        //
+        // 实测问题(10-28): 丢目标后 cmd 停在最后一次跟踪的目标值(-67.5/-38.3),
+        // 而实测是 -62.4/2.4 —— pitch 差 40 度。mode=0 时下位机忽略所以看不出来,
+        // 但操作手一开自瞄, 下位机立刻执行这个陈旧命令, 云台会突然抬/低头 40 度。
+        // "没有目标" 的正确含义是"**停在现在这里**", 不是"继续去上次那个点"。
+        if (have_meas) {
+            cmd_yaw   = meas_yaw;
+            cmd_pitch = meas_pitch;
+        }
         // **不要立刻清软启动计数**。
         //
         // 实测(10-28): 下位机的 mode 在刚开自瞄时会 0/1 快速闪烁(每 0.5~1 秒一次),
