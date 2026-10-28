@@ -47,6 +47,11 @@ static int tb_off_yaw   = 0;     // /10 deg
 static int tb_off_pitch = 0;
 static int tb_lat_ms    = 80;
 static int tb_gain      = 100;   // /100
+// 伺服方向符号, 0 -> -1, 1 -> +1。**做成滑条而不是常量**:
+// 这个符号依赖 相机朝向/云台轴向/图像翻转 三重约定, 只能靠人眼看一次大动作确认,
+// 每次都重编译部署太慢。滑条拨一下就能看到效果。
+static int tb_dir_yaw   = 0;     // 默认 -1
+static int tb_dir_pitch = 0;     // 默认 -1
 
 static void row(cv::Mat& m, int& y, const char* k, const std::string& v,
                 const cv::Scalar& col) {
@@ -123,6 +128,8 @@ int main(int argc, char** argv) {
     cv::createTrackbar("off pitch x10",  kW2, &tb_off_pitch, 100);
     cv::createTrackbar("latency ms",     kW2, &tb_lat_ms,    300);
     cv::createTrackbar("gain x100",      kW2, &tb_gain,      200);
+    cv::createTrackbar("dirYaw 0=-1 1=+1", kW2, &tb_dir_yaw,   1);
+    cv::createTrackbar("dirPitch 0=-1 1=+1", kW2, &tb_dir_pitch, 1);
 
     double last_t = 0.0;
 
@@ -165,6 +172,8 @@ int main(int argc, char** argv) {
         const bool vis   = fb.valid && fb.mode == 1;
         if (fresh) gimbal.update_feedback(fb.yaw, fb.pitch);
 
+        gimbal.servo_dir_yaw   = (tb_dir_yaw   == 0) ? -1.0f : 1.0f;
+        gimbal.servo_dir_pitch = (tb_dir_pitch == 0) ? -1.0f : 1.0f;
         gimbal.servo_gain       = static_cast<float>(tb_gain) / 100.0f;
         gimbal.aim_offset_yaw   = static_cast<float>(tb_off_yaw) / 10.0f;
         gimbal.aim_offset_pitch = static_cast<float>(tb_off_pitch) / 10.0f;
@@ -313,9 +322,9 @@ int main(int argc, char** argv) {
         row(pnl, y, "latency", std::to_string(tb_lat_ms) + " ms", OR);
         std::snprintf(b, sizeof(b), "%.2f", static_cast<double>(gimbal.servo_gain));
         row(pnl, y, "gain", b, OR);
-        std::snprintf(b, sizeof(b), "%+.0f / %+.0f", gimbal.servo_dir_yaw,
-                      gimbal.servo_dir_pitch);
-        row(pnl, y, "servo dir", b, GY);
+        std::snprintf(b, sizeof(b), "%+.0f / %+.0f  (dirYaw/dirPitch)",
+                      gimbal.servo_dir_yaw, gimbal.servo_dir_pitch);
+        row(pnl, y, "servo dir", b, OR);
         std::snprintf(b, sizeof(b), "%.1f / %.1f", gimbal.effective_home_yaw(),
                       gimbal.effective_home_pitch());
         row(pnl, y, "home", b, GY);
