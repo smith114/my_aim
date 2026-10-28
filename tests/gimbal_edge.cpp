@@ -28,9 +28,9 @@ static void prime(GimbalCtrl& g, float yaw, float pitch) {
 }
 
 int main() {
-    std::printf("GIMBAL_ENVELOPE_DEG = %.1f  SERVO_MAX_STEP = %.1f\n\n",
+    std::printf("GIMBAL_ENVELOPE_DEG = %.1f  SERVO_MAX_CORR_DEG = %.1f\n\n",
                 static_cast<double>(srm::GIMBAL_ENVELOPE_DEG),
-                static_cast<double>(srm::SERVO_MAX_STEP));
+                static_cast<double>(srm::SERVO_MAX_CORR_DEG));
 
     // ---------------------------------------------------------------- 1
     // pitch 包络**不能回绕**。home_pitch=3 时, 允许下限是 -27,
@@ -115,7 +115,7 @@ int main() {
         }
         std::printf("  cmd_yaw = %.2f   单帧最大跳变 = %.2f 度\n",
                     static_cast<double>(g.cmd_yaw), static_cast<double>(max_jump));
-        CHECK(max_jump <= srm::SERVO_MAX_STEP + 0.01f, "yaw 单帧跳变不超过 SERVO_MAX_STEP");
+        CHECK(max_jump <= srm::SERVO_MAX_CORR_DEG + 0.01f, "yaw 单帧跳变不超过 SERVO_MAX_CORR_DEG");
         CHECK(g.cmd_yaw >= 0.0f && g.cmd_yaw < 360.0f, "yaw 命令角在 [0,360) 内");
     }
 
@@ -140,7 +140,7 @@ int main() {
         // 1.5 度而不是更严: 这个被控对象是"每帧走 35%% 的一阶滞后 + 每帧限速 2 度",
         // 存在一拍延迟, 因此会有小幅极限环而不是精确收敛到 0。
         // 实测残差约 1.07 度, 属于这个对象特性, 不是控制律错。
-        // 若以后改了 SERVO_GAIN / SERVO_MAX_STEP / GIMBAL_SMOOTH, 这个数会跟着变,
+        // 若以后改了 SERVO_GAIN / SERVO_MAX_CORR_DEG / GIMBAL_SMOOTH, 这个数会跟着变,
         // 那时应重新评估而不是直接放宽阈值。
         CHECK(std::fabs(residual) < 1.5f, "稳态残差 < 1.5 度(该对象存在约1度的极限环)");
         std::printf("  注: 残差 %.2f 度对应 5m 处 140mm 板宽约 %.1f%% 的板宽\n",

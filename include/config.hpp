@@ -162,7 +162,12 @@ constexpr float SERVO_DIR_YAW   = -1.0f;   // **实测确认**: servo_calib 偏�
 constexpr float SERVO_DIR_PITCH =  1.0f;
 
 constexpr float SERVO_GAIN      = 1.0f;   // 偏差角 -> 需要转过的角度 的比例
-constexpr float SERVO_MAX_STEP  = 2.0f;   // 每帧最大转动(度), 防大偏差猛甩
+// 单帧**修正量**上限(度)。这是控制律里唯一的限幅, 直接决定"逼近速度":
+//   |theta| <= 该值 -> 一帧到位
+//   |theta| >  该值 -> 每帧最多修这么多, 分段逼近(不会一次甩出去)
+// 实测教训(10-28): 原来按 2 度/帧 在累积命令上做限制, 云台冲过头 30 多度把板甩出画面。
+// 现在恒速冲是不可能的, 因为命令永远是 "实测角 + 有限修正"。
+constexpr float SERVO_MAX_CORR_DEG = 6.0f;   // 分 4~5 段追上 25 度的大偏角
 // 软启动帧数: 进跟踪后增益从 0 线性升到 SERVO_GAIN。
 // 目的: 切换视觉模式的那一刻, 如果目标偏角较大, 不要一上来就满增益猛转。
 // 20 帧 @ 约 16fps 约 1.2 秒, 足够平缓又不至于明显迟钝。

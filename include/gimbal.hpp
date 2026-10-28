@@ -146,17 +146,29 @@ public:
             return false;   // 不再推进伺服
         }
 
-        // 期望角 = 实测角 + 方向 * 偏差 * 增益 * 软启动系数
-        const float want_yaw   = meas_yaw   + servo_dir_yaw   * ty * SERVO_GAIN * ramp;
-        const float want_pitch = meas_pitch + servo_dir_pitch * tp * SERVO_GAIN * ramp;
+        // ------------------------------------------------------------
+        // **期望角 = 实测角 + 限幅后的修正量**
+        //
+        // 之前是 "cmd = step_toward(cmd, want, 2.0)": 在**累积的 cmd** 上做速率限制。
+        // 问题: cmd 自己以 2 度/帧往前走, 而 meas 因为机械惯性在后面追, 于是
+        // cmd 领先 meas 越来越多 —— 实测 cmd 和 fb 差了 25~33 度, 云台一路冲过
+        // 目标 30 多度, 直接把装甲板甩出画面(日志里 armor 从 1.0 掉到 0)。
+        //
+        // 改成每帧都从 meas 重新算: 修正量 = DIR*theta, 但**限幅**在
+        // SERVO_MAX_CORR_DEG 之内。于是:
+        //   |theta| 小 -> 修正小 -> 慢慢贴上去, 不过冲
+        //   |theta| 大 -> 修正被限在 8 度 -> 分段逼近, 不会一次猛甩 30 度
+        // 结构上**不可能累积**: 命令永远只比实测角大有限的一点点。
+        const float cy = clamp_val(servo_dir_yaw   * ty * SERVO_GAIN * ramp,
+                                   -SERVO_MAX_CORR_DEG, SERVO_MAX_CORR_DEG);
+        const float cp = clamp_val(servo_dir_pitch * tp * SERVO_GAIN * ramp,
+                                   -SERVO_MAX_CORR_DEG, SERVO_MAX_CORR_DEG);
 
-        // 限幅步进: 每帧最多转 SERVO_MAX_STEP 度, 防大偏差时猛甩
-        last_want_yaw   = want_yaw;
-        last_want_pitch = want_pitch;
-        cmd_yaw   = step_toward(cmd_yaw,   want_yaw,   SERVO_MAX_STEP);
-        cmd_pitch = step_toward(cmd_pitch, want_pitch, SERVO_MAX_STEP);
-        cmd_yaw   = wrap_or_clamp_yaw(cmd_yaw);
-        cmd_pitch = wrap_or_clamp_pitch(cmd_pitch);
+        last_want_yaw   = meas_yaw   + cy;
+        last_want_pitch = meas_pitch + cp;
+
+        cmd_yaw   = wrap_or_clamp_yaw(meas_yaw + cy);
+        cmd_pitch = wrap_or_clamp_pitch(meas_pitch + cp);
         apply_envelope();   // 再套一层安全包络
         return true;
     }
