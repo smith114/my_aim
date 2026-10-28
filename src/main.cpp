@@ -625,6 +625,16 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 gimbal.track(theta_yaw, theta_pitch);
                 if (tr.locked) last_locked_frame = frame_cnt;
             } else if (fb_fresh && !vision_on) {
+                // ******** 这里必须调用 stop_tracking() ********
+                //
+                // 实测(10-28): 程序启动时没对准靶标 -> 操作手手动摆正 -> 但这段
+                // 期间 mode=0, 既不 track 也不 stop_tracking, 于是"连续无目标帧数"
+                // 一直是 0。等开了自瞄进 track() 时, 重新锚定 home 的条件
+                // (lost_cnt_ > 60) 不成立 -> 包络中心仍是启动时那个错方向
+                // -> 命令被夹住 -> 永远追不到靶标。
+                //
+                // 调用 stop_tracking() 让计数器正常累加, 开自瞄时就能重新锚定。
+                gimbal.stop_tracking();
                 // 检出正常但下位机不接收 —— 每分钟只提醒一次, 避免刷屏
                 static int warn_cnt = 0;
                 if (++warn_cnt % 900 == 1) {
