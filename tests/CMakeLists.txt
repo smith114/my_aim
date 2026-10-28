@@ -11,6 +11,7 @@ set(TEST_TARGETS
   test_kf
   test_kf3d
   test_spin_ekf
+  test_frame
 )
 
 foreach(t ${TEST_TARGETS})
