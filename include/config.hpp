@@ -159,7 +159,12 @@ constexpr float SERVO_DIR_YAW   = -1.0f;   // **实测确认**: servo_calib 偏�
 //     -> SERVO_DIR_PITCH = +1
 // **已由 servo_calib 实测确认**: 往 +1 方向转使偏角 2.54 -> 0.50。
 // 与上面从"天花板 pitch=-32.89"推出来的一致, 两条独立路径互相印证。
-constexpr float SERVO_DIR_PITCH =  1.0f;
+constexpr float SERVO_DIR_PITCH = -1.0f;   // **操作手实测**(10-28):
+//     yaw 增大 -> 镜头**向左**,  pitch 增大 -> 镜头**向上**
+//   theta_yaw>0 = 目标在右  -> 要往右转 -> yaw 必须减小 -> YAW = -1
+//   theta_pitch>0 = 目标在下 -> 要低头   -> pitch 必须减小 -> PITCH = -1
+// 注意: 两轴都是 -1。之前 pitch 取 +1 导致目标在下方时镜头上仰, 一路顶到
+// +26.1 上限并堵转 —— 视频里"云台上仰然后停住"就是它。
 
 constexpr float SERVO_GAIN      = 1.0f;   // 偏差角 -> 需要转过的角度 的比例
 // 单帧**修正量**上限(度)。这是控制律里唯一的限幅, 直接决定"逼近速度":

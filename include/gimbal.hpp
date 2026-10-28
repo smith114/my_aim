@@ -50,17 +50,14 @@ public:
     // 判据: 正确方向下, 施加修正后 |theta| 应变小。
     // 若连续 kFlipFrames 帧 |theta| 都变大, 说明该轴符号反了 -> 翻转。
     // 每轴最多翻 kMaxFlips 次, 防止来回抖。
-    // 自适应符号开关。测试里要关掉: 那些用例用固定 theta 验证包络/回绕算术,
-    // 自适应会把符号翻掉, 让算术断言失去意义。
-    bool  adapt_enable = true;
-    int   flip_yaw_   = 0;
-    int   flip_pitch_ = 0;
-    float prev_mag_yaw_   = 0.0f;
-    float prev_mag_pitch_ = 0.0f;
-    int   grow_yaw_   = 0;
-    int   grow_pitch_ = 0;
-    static constexpr int kFlipFrames = 8;
-    static constexpr int kMaxFlips   = 3;
+
+
+
+
+
+
+
+
     float last_want_yaw   = 0.0f;
     float last_want_pitch = 0.0f;
     float last_theta_yaw = 0.0f;    // 上一帧相机系偏差(自检用)
@@ -174,34 +171,6 @@ public:
         //   |theta| 小 -> 修正小 -> 慢慢贴上去, 不过冲
         //   |theta| 大 -> 修正被限在 8 度 -> 分段逼近, 不会一次猛甩 30 度
         // 结构上**不可能累积**: 命令永远只比实测角大有限的一点点。
-        // ---- 自适应符号判定(逐轴独立) ----
-        // 只看"施加修正之后 |theta| 有没有变小"。注意用 ty/tp(滤波后的偏差),
-        // 并跳过死区内的帧 —— 那时 theta 接近 0, 判不出方向。
-        auto adapt = [&](float mag, float& prev, int& grow, int& flips, float& dir,
-                         const char* axis) {
-            if (mag > GIMBAL_DEADBAND) {
-                if (prev > GIMBAL_DEADBAND && mag > prev + 0.15f) {
-                    ++grow;
-                } else if (mag < prev - 0.15f) {
-                    grow = 0;                     // 在改善, 方向对
-                }
-                if (grow >= kFlipFrames && flips < kMaxFlips) {
-                    dir = -dir;
-                    ++flips;
-                    grow = 0;
-                    std::printf("[GIMBAL] 自适应: %s 轴 |theta| 连续增大, 翻转为 %+.0f\n",
-                                axis, static_cast<double>(dir));
-                }
-                prev = mag;
-            }
-        };
-        if (adapt_enable) {
-            adapt(std::fabs(ty), prev_mag_yaw_,   grow_yaw_,   flip_yaw_,
-                  servo_dir_yaw,   "yaw");
-            adapt(std::fabs(tp), prev_mag_pitch_, grow_pitch_, flip_pitch_,
-                  servo_dir_pitch, "pitch");
-        }
-
         const float cy = clamp_val(servo_dir_yaw   * ty * SERVO_GAIN * ramp,
                                    -SERVO_MAX_CORR_DEG, SERVO_MAX_CORR_DEG);
         const float cp = clamp_val(servo_dir_pitch * tp * SERVO_GAIN * ramp,

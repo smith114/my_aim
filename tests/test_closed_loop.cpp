@@ -50,7 +50,6 @@ static LoopOutcome run_loop(float bearing_rel_deg, float dist_mm, int steps,
         // 它内置的被控对象模型假定 "编码器增大 -> 光轴同向转", 即 DIR=+1。
         // 实机 DIR 的符号是另一个问题(见 config.hpp 的实测说明), 在这里固定为 +1,
         // 这样符号一旦在配置里改动, 不会把控制律本身的回归测试带崩。
-        gimbal.adapt_enable = false;
         gimbal.servo_dir_yaw = 1.0f;
         gimbal.servo_dir_pitch = 1.0f;
     tracker.set_frame_size(cv::Size(1440, 1080));
@@ -172,7 +171,6 @@ int main() {
         // 它内置的被控对象模型假定 "编码器增大 -> 光轴同向转", 即 DIR=+1。
         // 实机 DIR 的符号是另一个问题(见 config.hpp 的实测说明), 在这里固定为 +1,
         // 这样符号一旦在配置里改动, 不会把控制律本身的回归测试带崩。
-        gimbal.adapt_enable = false;
         gimbal.servo_dir_yaw = 1.0f;
         gimbal.servo_dir_pitch = 1.0f;
         tracker.set_frame_size(cv::Size(1440, 1080));
@@ -208,7 +206,6 @@ int main() {
         // 它内置的被控对象模型假定 "编码器增大 -> 光轴同向转", 即 DIR=+1。
         // 实机 DIR 的符号是另一个问题(见 config.hpp 的实测说明), 在这里固定为 +1,
         // 这样符号一旦在配置里改动, 不会把控制律本身的回归测试带崩。
-        gimbal.adapt_enable = false;
         gimbal.servo_dir_yaw = 1.0f;
         gimbal.servo_dir_pitch = 1.0f;
         CHECK(!gimbal.have_meas);
@@ -229,7 +226,6 @@ int main() {
         // 它内置的被控对象模型假定 "编码器增大 -> 光轴同向转", 即 DIR=+1。
         // 实机 DIR 的符号是另一个问题(见 config.hpp 的实测说明), 在这里固定为 +1,
         // 这样符号一旦在配置里改动, 不会把控制律本身的回归测试带崩。
-        gimbal.adapt_enable = false;
         gimbal.servo_dir_yaw = 1.0f;
         gimbal.servo_dir_pitch = 1.0f;
         const float PITCH_LO = -35.8f;   // 实测下限
@@ -278,7 +274,6 @@ int main() {
         // 它内置的被控对象模型假定 "编码器增大 -> 光轴同向转", 即 DIR=+1。
         // 实机 DIR 的符号是另一个问题(见 config.hpp 的实测说明), 在这里固定为 +1,
         // 这样符号一旦在配置里改动, 不会把控制律本身的回归测试带崩。
-        gimbal.adapt_enable = false;
         gimbal.servo_dir_yaw = 1.0f;
         gimbal.servo_dir_pitch = 1.0f;
         gimbal.update_feedback(0.0f, 0.0f);
