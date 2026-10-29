@@ -38,22 +38,7 @@ endif()
 # 留一点余量取 0.6: 允许斜视时板变窄, 但不允许"高比宽大 4 倍"的怪形状。
 add_compile_definitions(PAIR_ASPECT_MIN=0.6f)
 
-# ---- Eigen: 同济 EKF 与坐标系适配层需要 ----
-# 系统装在 /usr/include/eigen3, 但默认不在搜索路径里; 全局加一次,
-# 避免每个 target 单独处理(踩过: main 包含 srm_to_tongji.hpp 时找不到 Eigen/Dense)
-find_package(Eigen3 QUIET)
-if(Eigen3_FOUND)
-  set(EIGEN_INCLUDE_DIR ${EIGEN3_INCLUDE_DIR})
-else()
-  find_path(EIGEN_INCLUDE_DIR Eigen/Dense PATHS /usr/include/eigen3 /usr/local/include/eigen3)
-endif()
-if(EIGEN_INCLUDE_DIR)
-  include_directories(${EIGEN_INCLUDE_DIR})
-  message(STATUS "Eigen: ${EIGEN_INCLUDE_DIR}")
-else()
-  message(WARNING "Eigen: 未找到, 同济 EKF 不会被编入")
-endif()
-
+# (Eigen 已移除: 同济 EKF 子系统整体删除, 不再需要 Eigen)
 find_package(OpenCV REQUIRED)
 find_package(Threads REQUIRED)
 
@@ -169,26 +154,7 @@ if(OpenVINO_FOUND)
   target_link_libraries(aim_gui PRIVATE openvino::runtime)
 endif()
 
-# ---------------------------------------------------------------- 同济 EKF (旋转目标)
-# 直接用同济 sp_vision_25 的 11 维 EKF 目标模型, 而不是自己重写:
-#   · 它把"四块板中的哪一块"建进观测模型(h_armor_xyz 依赖 id 与 armor_num)
-#   · 状态含轴心/速度/相位/转速/半径/L 形偏移
-#   · 这是旋转装甲板(小陀螺)的标准解法, 经过比赛验证
-find_package(Eigen3 QUIET)
-if(Eigen3_FOUND OR EXISTS "/usr/include/eigen3/Eigen/Dense")
-  add_library(tongji_ekf STATIC include/tongji/target.cpp include/tongji/math_tools.cpp)
-  target_include_directories(tongji_ekf PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/tongji)
-  if(Eigen3_FOUND)
-    target_link_libraries(tongji_ekf PUBLIC Eigen3::Eigen)
-  else()
-    target_include_directories(tongji_ekf PUBLIC /usr/include/eigen3)
-  endif()
-  target_include_directories(tongji_ekf PUBLIC /usr/include/opencv4)
-  message(STATUS "同济 EKF: 已编入 (tongji_ekf)")
-else()
-  message(WARNING "同济 EKF: 找不到 Eigen, 未编入")
-endif()
+# (同宗 EKF 子系统已移除 —— 未接入主流程, 见标签 before-cleanup-20261029)
 
 # ---------------------------------------------------------------- 标定工具
 add_executable(calibrate src/calibrate.cpp)

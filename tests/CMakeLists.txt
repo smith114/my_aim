@@ -9,9 +9,6 @@ set(TEST_TARGETS
   test_closed_loop
   gimbal_edge
   test_kf
-  test_kf3d
-  test_spin_ekf
-  test_frame
   test_fire
 )
 
