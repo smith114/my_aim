@@ -805,8 +805,13 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         // 扣掉提前量: 追匀速目标时闭环会稳定在"落后一个提前量角"上,
         // 那是正常跟随误差, 不是没瞄准。若判据直接看 theta-offset,
         // 旋转靶会被这个必然存在的滞后挡住 -> 永远停火。
-        const float err_y = std::fabs(raw_yaw_ex - gimbal.aim_offset_yaw)   - std::fabs(lead_yaw);
-        const float err_p = std::fabs(raw_pitch_ex - gimbal.aim_offset_pitch) - std::fabs(lead_pitch);
+        // 必须夹到 >= 0: fire.hpp 里是按平方和取模的, 负数会被平方成正数,
+        // 于是"扣掉提前量"的效果完全丢失 -> 本来该开火的被判超差 -> 永久停火。
+        // 实测(10-29) 就是这个: err 变成 -2.5, 平方后是 2.5, 超过容差 1.5。
+        const float err_y = std::fmax(0.0f, std::fabs(raw_yaw_ex - gimbal.aim_offset_yaw)
+                                             - std::fabs(lead_yaw));
+        const float err_p = std::fmax(0.0f, std::fabs(raw_pitch_ex - gimbal.aim_offset_pitch)
+                                             - std::fabs(lead_pitch));
         const bool  fire_ok = fire_decision(
             (ENABLE_FIRE || cli_enable_fire), tr.locked, vision_on, fb_fresh,
             (follow >= 0), f_dist, err_y, err_p, f_speed, fire_lock_streak);
