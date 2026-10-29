@@ -938,7 +938,16 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         }
 
         if (!headless) {
-            if (!disp.empty()) cv::imshow("my_aim", disp);
+            // 显示节流: 只在每 DISPLAY_EVERY_N 帧送显一次, 且缩放到 DISPLAY_SCALE。
+            // 控制循环仍然每帧全速跑, 只有"给人看"这一步被抽稀 ——
+            // 这是把"卡顿"和"控制慢"解耦的关键。
+            static int disp_cnt = 0;
+            if (!disp.empty() && (++disp_cnt % DISPLAY_EVERY_N == 0)) {
+                cv::Mat small;
+                cv::resize(disp, small, cv::Size(), DISPLAY_SCALE, DISPLAY_SCALE,
+                           cv::INTER_NEAREST);
+                cv::imshow("my_aim", small);
+            }
             const int k = cv::waitKey(1);
             if (k == 'q' || k == 27) break;
             if (k == 'w' || k == 'W') gimbal.manual_pitch( GIMBAL_MANUAL_STEP);

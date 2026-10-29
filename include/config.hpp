@@ -383,6 +383,19 @@ constexpr float BULLET_SPEED_DEFAULT = 22.0f;   // 裁判系统未注入时的�
 constexpr bool  BALLISTIC_COMP_ENABLE = false;  // 中期先关, 终验打命中率时开
 
 // ============================================================ 通信
+// ******** 显示节流 ********
+//
+// 实测(10-29): 画面卡顿影响跟随。原因是**渲染和控制在同一线程**:
+// cv::imshow 显示 1440x1080, 每帧要 拷贝+画框+贴字+缩放+送显,
+// 全部挤在控制循环里 -> 命令更新率被拉低 -> 下位机收到的是稀疏指令 -> 看起来卡。
+//
+// 处理办法不是关掉画面, 而是**降显示、不降控制**:
+//   处理/发送: 每帧都做(全速)
+//   显示:      每 DISPLAY_EVERY_N 帧一次, 且缩到 DISPLAY_SCALE
+// 这样 60fps 采集时显示约 20~30fps(人眼够用), 控制仍是全速。
+constexpr int   DISPLAY_EVERY_N = 2;      // 每 N 帧显示一次
+constexpr float DISPLAY_SCALE   = 0.5f;   // 送显前缩放(0.5 = 高宽各一半, 像素数 1/4)
+
 constexpr int SERIAL_SEND_HZ = 100;        // 协议推荐 100 Hz 定频单帧发送
 constexpr int SERIAL_WATCHDOG_MS = 500;    // 控制量超时自动归零
 constexpr int SERIAL_SHUTDOWN_ZERO_FRAMES = 20;
