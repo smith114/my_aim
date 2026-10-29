@@ -282,7 +282,17 @@ constexpr float SERVO_MAX_CORR_DEG = 6.0f;   // 分 4~5 段追上 25 度的大�
 // 20 帧 @ 约 16fps 约 1.2 秒, 足够平缓又不至于明显迟钝。
 constexpr int   SERVO_SOFT_START_FRAMES = 20;
 constexpr float GIMBAL_SMOOTH   = 0.35f;  // 偏差角低通系数
-constexpr float GIMBAL_DEADBAND = 0.0f;   // 现场定为 0(有 measLP 低通就够, 死区反而影响精度)   // 死区(度), 消极限环摆动
+// ******** 死区: 已按轴区分 ********
+//
+// 实测(10-29): 死区设 0 之后 **pitch 方向上下抖**。
+// 原因是物理的: 旋转靶绕**竖直轴**转, pitch 方向没有真实运动,
+// theta_pitch 全是检测噪声; 死区为 0 就等于让纯噪声直接驱动伺服。
+// yaw 有真实运动, 不需要死区。
+//
+// 现场取值: pitch 0.3 度。5m 处 0.3 度 = 26mm, 而板宽 140mm,
+// 精度损失可忽略, 但能消掉小噪声引起的抖动。
+constexpr float GIMBAL_DEADBAND      = 0.0f;   // yaw 轴
+constexpr float GIMBAL_DEADBAND_PITCH = 0.3f;  // pitch 轴(无真实运动, 只需抑制噪声)   // 现场定为 0(有 measLP 低通就够, 死区反而影响精度)   // 死区(度), 消极限环摆动
 constexpr float GIMBAL_MANUAL_STEP = 1.5f;// 手动控制步长(度/次)
 
 // 安全包络: 命令角离"启动姿态"最远允许多少度。

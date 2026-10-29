@@ -46,7 +46,8 @@ public:
     // 输出平滑系数与死区, 做成成员以便现场用滑条阻尼抖动。
     // 静止靶时若 theta 有小幅噪声, 死区能把它压成 0, cmd 就稳住了。
     float smooth_coef = GIMBAL_SMOOTH;
-    float deadband    = GIMBAL_DEADBAND;
+    float deadband       = GIMBAL_DEADBAND;
+    float deadband_pitch = GIMBAL_DEADBAND_PITCH;   // pitch 单独, 见 config 说明
     float aim_offset_yaw    = AIM_YAW_OFFSET_DEG;
     float aim_offset_pitch  = AIM_PITCH_OFFSET_DEG;
     float servo_dir_pitch = SERVO_DIR_PITCH;
@@ -196,7 +197,9 @@ public:
 
         // 低通 + 死区, 抑制角点噪声引起的抖动
         const float ty = smooth(theta_yaw, sm_yaw_);
-        const float tp = smooth(theta_pitch, sm_pitch_);
+        // pitch 用独立死区: 该轴在旋转靶上无真实运动, 纯噪声不该驱动伺服
+        float tp = smooth(theta_pitch, sm_pitch_);
+        if (std::fabs(tp) < deadband_pitch) tp = 0.0f;
 
         // ---- 发散保护 ----
         // 符号错时闭环是正反馈: |theta| 会一路上涨, 云台转到限位还在转。

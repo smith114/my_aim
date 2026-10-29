@@ -490,6 +490,8 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
     float  last_bullet_speed = BULLET_SPEED_DEFAULT;
 
     while (g_stop == 0) {
+        // 分段计时(秒): 定位卡顿在取帧/推理/解算哪一段
+        double t_infer0 = 0.0, t_infer1 = 0.0, t_solve1 = 0.0;
         // ------------------------------------------------ 取帧
         if (synth) {
             // 模拟靶标模式: 世界系里靶标固定在某个方位角, 相机光轴跟着模拟云台转。
@@ -540,7 +542,9 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
 
 #ifdef HAVE_OPENVINO
         if (use_yolo && yolo) {
-            const auto boxes = yolo->detect(frame);
+            t_infer0 = now_s();
+        const auto boxes = yolo->detect(frame);
+        t_infer1 = now_s();
             stat_yolo_boxes += static_cast<int>(boxes.size());
             armors = filter_by_color(yolo_to_armors(boxes), want_color);
             if (!armors.empty()) {
@@ -588,6 +592,7 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
 
         // ------------------------------------------------ 跟踪
         const TrackResult tr = tracker.update(candidates);
+        t_solve1 = now_s();
         if (!candidates.empty()) last_candidate_frame = frame_cnt;
         if (tr.locked && tr.index >= 0) {
             ++stat_locked;
@@ -865,6 +870,14 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
 
         if (frame_cnt % log_every == 0) {
             const RxState& s = fb;   // 同上: mock 下才有意义的值
+            // 每帧耗时拆分: 定位卡顿到底在哪一段。
+            // 单独一行、格式简单 —— 不和多字段的 [DET] 混在一起(那里错过三次)。
+            if (follow >= 0) {
+                LOG("[TIME] 推理 %.1f ms  解算跟踪 %.1f ms  预估帧率 %.1f fps\n",
+                    (t_infer1 - t_infer0) * 1000.0,
+                    (t_solve1 - t_infer1) * 1000.0,
+                    1.0 / std::fmax(kf_dt, 1e-6));
+            }
             // 提前量单独一行: 格式简单, 不会和上面那条多字段日志互相影响。
             // 现场核对"旋转靶是不是打偏在空隙上"就看这个 —— 提前量应随转速增大。
             if (follow >= 0) {
