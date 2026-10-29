@@ -869,11 +869,13 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             // 现场核对"旋转靶是不是打偏在空隙上"就看这个 —— 提前量应随转速增大。
             if (follow >= 0) {
                 LOG("[LEAD] 外推 %.0f ms (链路%.0f + 飞行%.0f)  "
-                    "提前量 %.2f/%.2f 度  dist=%.2f m\n",
+                    "提前量 %.2f/%.2f 度  角速度 %.2f/%.2f 度每秒  dist=%.2f m\n",
                     static_cast<double>(t_lead_used * 1000.0),
                     static_cast<double>(KF_LATENCY_S * 1000.0),
                     static_cast<double>((t_lead_used - KF_LATENCY_S) * 1000.0),
                     static_cast<double>(lead_yaw), static_cast<double>(lead_pitch),
+                    static_cast<double>(kf_yaw.omega() * 57.29578f),
+                    static_cast<double>(kf_pitch.omega() * 57.29578f),
                     static_cast<double>(f_dist_for_lead_log));
             }
             LOG("[DET] f=%d bars=%.1f armor=%.1f solved=%.1f locked=%.1f state=%s "

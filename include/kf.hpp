@@ -111,6 +111,19 @@ public:
 
     // 外推 L 秒后的角度 —— 这就是延迟补偿的输出
     float predict_ahead(float L) const {
+        // ******** 角速度太小时不外推 ********
+        //
+        // 实测问题(10-29): 把外推时长从 80ms 加到 315ms(补弹丸飞行时间)后,
+        // **pitch 方向开始上下抖**。原因是旋转靶绕**竖直轴**转, pitch 方向
+        // 没有真实运动, 它的 omega 估计全是噪声; 而外推时长放大 4 倍,
+        // 噪声也被放大 4 倍 -> 抖动。
+        //
+        // 物理判据: |omega| 小到 L 秒内位移不足板宽时, 外推没有意义。
+        // 取阈值 KF_MOVING_RATE_DPS(3 度/秒): 0.3s 内只移动 0.9 度,
+        // 小于 5m 处的半板宽(0.78 度), 外推与不外推等效, 但不外推不会放大噪声。
+        if (!rate_trusted() || std::fabs(omega_) < KF_MOVING_RATE_DPS) {
+            return theta_;
+        }
         float a = theta_ + omega_ * L;
         // 外推限幅: 速度已知不可靠时不要把角度推飞
         const float cap = kMaxLeadDeg;
