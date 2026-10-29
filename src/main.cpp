@@ -697,21 +697,14 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             const float raw_yaw   = candidates[follow].solve.yaw;
             raw_yaw_ex = raw_yaw;
 
-            // ---- 换板检测: 换板时重置滤波器, 避免"切换时增加补偿" ----
+            // ---- 换板检测 ----
+            // 换板时**只重设角度, 保留角速度**: 两块板在同一旋转体上, 转速连续,
+            // 所以提前量不该断。曾经写成 reset() 把 ω 也清零, 结果提前量
+            // 9.5° -> 0 -> 9.5°, 制造两个台阶, 比不处理更糟。
             static int   s_prev_follow = -1;
             static float s_prev_raw_y  = 0.0f;
             const bool switched = (s_prev_follow != follow) ||
                                   (std::fabs(raw_yaw - s_prev_raw_y) > KF_SWITCH_JUMP_DEG);
-            if (switched) {
-                kf_yaw.reset();
-                kf_pitch.reset();
-                // 只在这一帧打印, 避免刷屏(换板本来就频繁)
-                static int s_sw_cnt = 0;
-                if (++s_sw_cnt % 10 == 1) {
-                    LOG("[SWITCH] 换板/突跳, 重置滤波器(提前量清零) idx %d->%d\n",
-                        s_prev_follow, follow);
-                }
-            }
             s_prev_follow = follow;
             s_prev_raw_y  = raw_yaw;
         // 飞行时间补偿需要的距离与弹速(弹速无效时回退默认值)
@@ -724,6 +717,13 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             if (KF_ENABLE) {
                 kf_yaw.predict(kf_dt);
                 kf_pitch.predict(kf_dt);
+                // 换板/突跳: 先把角度重设到新板的测量值, 保留角速度,
+                // 然后再走正常的 update —— 这样提前量不会断, 也不会被
+                // 新息门限当成离群丢掉。
+                if (switched) {
+                    kf_yaw.reseed(raw_yaw);
+                    kf_pitch.reseed(raw_pitch);
+                }
                 kf_yaw.update(raw_yaw);
                 kf_pitch.update(raw_pitch);
                 // 预测到**子弹到达时刻**: 链路延迟 + 飞行时间
