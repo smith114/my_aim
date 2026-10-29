@@ -122,6 +122,27 @@ static void load_knobs() {
 }
 
 
+// ******** 把变量值同步回滑条位置 ********
+//
+// 必须做这一步: cv::createTrackbar 只**拷贝**创建那一刻的值, 之后改变量
+// 不会移动滑块。所以 load_knobs() 读了文件、tb_* 也改了, 但界面上滑块
+// 仍停在默认位置 —— 表现就是"打开后参数都是默认值, 不是当前值"。
+// 用 setTrackbarPos 显式回写。
+static void sync_trackbars(const char* win) {
+    cv::setTrackbarPos("conf x100",             win, tb_conf);
+    cv::setTrackbarPos("enemy 0B 1R 2all",      win, tb_enemy);
+    cv::setTrackbarPos("off yaw  (x10, 100=0)", win, tb_off_yaw);
+    cv::setTrackbarPos("off pitch (x10, 100=0)",win, tb_off_pitch);
+    cv::setTrackbarPos("latency ms",            win, tb_lat_ms);
+    cv::setTrackbarPos("gain x100",             win, tb_gain);
+    cv::setTrackbarPos("dirYaw 0=-1 1=+1",      win, tb_dir_yaw);
+    cv::setTrackbarPos("dirPitch 0=-1 1=+1",    win, tb_dir_pitch);
+    cv::setTrackbarPos("smooth x100",           win, tb_smooth);
+    cv::setTrackbarPos("deadband x10",          win, tb_deadband);
+    cv::setTrackbarPos("measLP x100",           win, tb_measlp);
+}
+
+
 int main(int argc, char** argv) {
     bool use_cam = true;
     std::string model = "v8", img;
@@ -197,7 +218,12 @@ int main(int argc, char** argv) {
     cv::createTrackbar("smooth x100",     kW3, &tb_smooth,   100);
     cv::createTrackbar("deadband x10",    kW3, &tb_deadband, 50);
     cv::createTrackbar("measLP x100",     kW3, &tb_measlp,   100);
-    load_knobs();   // 加载上次保存的值(没有文件就跳过)
+    std::printf("[CFG] dir=%d/%d off=%d/%d gain=%d smooth=%d dbz=%d measLP=%d conf=%d\n",
+                tb_dir_yaw, tb_dir_pitch, tb_off_yaw, tb_off_pitch,
+                tb_gain, tb_smooth, tb_deadband, tb_measlp, tb_conf);
+    load_knobs();            // 读文件 -> 改变量
+    sync_trackbars(kW3);     // 再改变量 -> 移滑块(不调用则界面停在默认值)
+    if (last_conf != tb_conf) rebuild(tb_conf);   // 让检测器也用文件里的 conf
 
     double last_t = 0.0;
 
@@ -545,7 +571,7 @@ int main(int argc, char** argv) {
         const int k = cv::waitKey(1);
         if (k == 27 || k == 'q') break;
         if (k == 's') save_knobs();
-        if (k == 'r') load_knobs();
+        if (k == 'r') { load_knobs(); sync_trackbars(kW3); }
     }
 
     link.stop();
