@@ -17,6 +17,8 @@
 
 #include <cmath>
 
+#include "config.hpp"
+
 namespace srm {
 
 class AngleKF {
@@ -133,7 +135,8 @@ private:
     int   rejected_ = 0;
 
     static constexpr float kMaxRate     = 90.0f;  // 度/秒, 超过就不像是装甲板
-    static constexpr float kMaxLeadDeg  = 8.0f;   // 单次外推最多推 8 度
+    // 单次外推上限, 由 config 决定(旋转靶需要更大提前量)
+    static constexpr float kMaxLeadDeg  = KF_MAX_LEAD_DEG;
     static constexpr int   kTrustFrames = 5;      // 至少 5 帧后才信任速度
     static constexpr float kGateDeg     = 12.0f;  // 新息门限(度): 超过判为离群
 };

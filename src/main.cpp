@@ -596,6 +596,12 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
 
         // ------------------------------------------------ 云台 -> 串口
         float theta_yaw = 0.0f, theta_pitch = 0.0f;
+        // 延迟补偿用的提前量(开火判据要从跟踪误差里扣掉)
+        float lead_yaw = 0.0f, lead_pitch = 0.0f;
+        float raw_pitch_ex = 0.0f;   // 带弹道补偿的原始 pitch, 开火判据用
+        float raw_yaw_ex   = 0.0f;   // 原始 yaw, 开火判据用(lead 在块内计算)
+        float t_lead_used  = 0.0f;   // 本次外推的总时间(链路+飞行), 日志用
+        float f_dist_for_lead_log = 0.0f;
 
         // 选要跟的候选:
         //   已锁定 -> 用跟踪器选中的那个(保持目标连续性)
@@ -684,14 +690,29 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             }
             // 原始测量 -> KF -> 外推
             const float raw_yaw   = candidates[follow].solve.yaw;
+            raw_yaw_ex = raw_yaw;
+        // 飞行时间补偿需要的距离与弹速(弹速无效时回退默认值)
+        const float f_dist_for_lead = candidates[follow].solve.dist;
+        f_dist_for_lead_log = f_dist_for_lead;
+        float f_speed_for_lead = fb.has_bullet_speed ? fb.bullet_speed : last_bullet_speed;
+        if (!(f_speed_for_lead > FIRE_MIN_BULLET_SPEED)) f_speed_for_lead = BULLET_SPEED_DEFAULT;
             const float raw_pitch = candidates[follow].solve.pitch + pitch_comp;
+            raw_pitch_ex = raw_pitch;
             if (KF_ENABLE) {
                 kf_yaw.predict(kf_dt);
                 kf_pitch.predict(kf_dt);
                 kf_yaw.update(raw_yaw);
                 kf_pitch.update(raw_pitch);
-                theta_yaw   = kf_yaw.predict_ahead(KF_LATENCY_S);
-                theta_pitch = kf_pitch.predict_ahead(KF_LATENCY_S);
+                // 预测到**子弹到达时刻**: 链路延迟 + 飞行时间
+                float t_lead = KF_LATENCY_S;
+                if (KF_LEAD_FLIGHT_TIME && f_dist_for_lead > 0.1f) {
+                    t_lead += f_dist_for_lead / f_speed_for_lead;
+                }
+                t_lead_used = t_lead;
+                theta_yaw   = kf_yaw.predict_ahead(t_lead);
+                theta_pitch = kf_pitch.predict_ahead(t_lead);
+                lead_yaw = theta_yaw - raw_yaw;    // 实际施加的提前量(开火判据要扣掉)
+                lead_pitch = theta_pitch - raw_pitch_ex;
             } else {
                 theta_yaw   = raw_yaw;
                 theta_pitch = raw_pitch;
@@ -776,8 +797,11 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         // 表现为"一直停火", 与被控对象是否对准完全无关。
         //
         // 真正的瞄准误差是 theta - offset: 它等于 0 才表示"枪口正对目标"。
-        const float err_y = theta_yaw   - gimbal.aim_offset_yaw;
-        const float err_p = theta_pitch - gimbal.aim_offset_pitch;
+        // 扣掉提前量: 追匀速目标时闭环会稳定在"落后一个提前量角"上,
+        // 那是正常跟随误差, 不是没瞄准。若判据直接看 theta-offset,
+        // 旋转靶会被这个必然存在的滞后挡住 -> 永远停火。
+        const float err_y = std::fabs(raw_yaw_ex - gimbal.aim_offset_yaw)   - std::fabs(lead_yaw);
+        const float err_p = std::fabs(raw_pitch_ex - gimbal.aim_offset_pitch) - std::fabs(lead_pitch);
         const bool  fire_ok = fire_decision(
             (ENABLE_FIRE || cli_enable_fire), tr.locked, vision_on, fb_fresh,
             (follow >= 0), f_dist, err_y, err_p, f_speed, fire_lock_streak);
@@ -841,6 +865,17 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
 
         if (frame_cnt % log_every == 0) {
             const RxState& s = fb;   // 同上: mock 下才有意义的值
+            // 提前量单独一行: 格式简单, 不会和上面那条多字段日志互相影响。
+            // 现场核对"旋转靶是不是打偏在空隙上"就看这个 —— 提前量应随转速增大。
+            if (follow >= 0) {
+                LOG("[LEAD] 外推 %.0f ms (链路%.0f + 飞行%.0f)  "
+                    "提前量 %.2f/%.2f 度  dist=%.2f m\n",
+                    static_cast<double>(t_lead_used * 1000.0),
+                    static_cast<double>(KF_LATENCY_S * 1000.0),
+                    static_cast<double>((t_lead_used - KF_LATENCY_S) * 1000.0),
+                    static_cast<double>(lead_yaw), static_cast<double>(lead_pitch),
+                    static_cast<double>(f_dist_for_lead_log));
+            }
             LOG("[DET] f=%d bars=%.1f armor=%.1f solved=%.1f locked=%.1f state=%s "
                 "want=%.1f/%.1f cmd=%.1f/%.1f fb=%.1f/%.1f home=%.1f/%.1f mode=%d th=%.1f/%.1f "
                 "lock_age=%d rx=%llu resync=%llu wd=%llu\n",
