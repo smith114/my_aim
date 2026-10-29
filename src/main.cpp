@@ -892,8 +892,9 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                     static_cast<double>(KF_LATENCY_S * 1000.0),
                     static_cast<double>((t_lead_used - KF_LATENCY_S) * 1000.0),
                     static_cast<double>(lead_yaw), static_cast<double>(lead_pitch),
-                    static_cast<double>(kf_yaw.omega() * 57.29578f),
-                    static_cast<double>(kf_pitch.omega() * 57.29578f),
+                    // omega() 本身就是【度/秒】, 不能再乘 57.3 —— 之前乘了, 日志显示 57 倍的假值(-1571 实际是 -27)
+                    static_cast<double>(kf_yaw.omega()),
+                    static_cast<double>(kf_pitch.omega()),
                     static_cast<double>(f_dist_for_lead_log));
             }
             LOG("[DET] f=%d bars=%.1f armor=%.1f solved=%.1f locked=%.1f state=%s "

@@ -147,7 +147,13 @@ private:
     int   frames_  = 0;
     int   rejected_ = 0;
 
-    static constexpr float kMaxRate     = 90.0f;  // 度/秒, 超过就不像是装甲板
+    // ******** omega_ 的单位是【度/秒】, 不是弧度 ********
+    // 这一点我搞错过一次: 以为日志里的 -1571 度/秒是限幅失效,
+    // 实际是 [LEAD] 打印时把度/秒又乘了 57.3(当弧度处理) —— 57 倍放大。
+    // 证据: 改成 1.57 后 test_kf 立刻报"预测误差 4.2172 == 不补偿滞后 4.2172",
+    // 说明 23 度/秒被夹到 1.57 < 门限 3, 外推被完全跳过。
+    // 所以限幅值保持 90 度/秒, 单位与 KF_Q_RATE / KF_MOVING_RATE_DPS 一致。
+    static constexpr float kMaxRate     = 90.0f;  // 度/秒
     // 单次外推上限, 由 config 决定(旋转靶需要更大提前量)
     static constexpr float kMaxLeadDeg  = KF_MAX_LEAD_DEG;
     static constexpr int   kTrustFrames = 5;      // 至少 5 帧后才信任速度
