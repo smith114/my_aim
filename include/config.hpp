@@ -124,8 +124,24 @@ constexpr float ARMOR_CENTER_V_MAX = 160.0f;  // 中心区域 HSV V 均值上限
 //   宽: 140*1807/5400 = 47 px  ✅
 //   高:  55*1807/5400 = 18 px  vs 实测 19 px  ✅(误差 1 像素)
 // 这条对上了, 说明 55 是正确值, 也解释了为什么之前填 57 也能用(差 3.6%)。
-constexpr float ARMOR_W = 140.0f;   // 整板宽(灯条在左右边缘)
-constexpr float ARMOR_H = 55.0f;    // **灯条高度**, 不是板高 125
+// ******** 与同济参考实现对齐(同一套 yolov8 keypoint) ********
+//
+// 同济 sp_vision_25 的 PnP 物体点 (tasks/auto_aim/solver.cpp:12-21):
+//   constexpr double LIGHTBAR_LENGTH   = 56e-3;    // 56 mm
+//   constexpr double SMALL_ARMOR_WIDTH = 135e-3;   // 135 mm
+//   SMALL_ARMOR_POINTS{ {0, ±SMALL_ARMOR_WIDTH/2, ±LIGHTBAR_LENGTH/2} }
+// 即 **宽 = 灯条间距 135, 高 = 灯条长度 56**。
+// 这与"整块板 140x125、灯条只有 55 高"的物理事实一致:
+// keypoint 标的是灯条区域, 所以竖向是灯条长度, 不是板高。
+//
+// 之前我们写 140x55: 高度基本对(差 1mm), 但**宽度大了 5mm**,
+// 导致宽高比 0.393 而正解是 0.415 —— 差 5.6%, 这个比值直接决定
+// PnP 解俯仰的条件, 必须一致。
+//
+// 注意: 从 140 改到 135 会让 dist 大约变 3.7%, pitch 估计也会略变,
+// 所以 AIM_PITCH_OFFSET_DEG(3.7, 原在 140x55/57 下标定)需要打靶微调一次。
+constexpr float ARMOR_W = 135.0f;   // 灯条间距(小装甲宽), 对齐同济
+constexpr float ARMOR_H =  56.0f;   // **灯条长度**, 对齐同济(不是板高 125)
 
 // ============================================================ 解算有效性
 constexpr float SOLVE_DIST_MIN  = 0.4f;   // m, 更近判为误检

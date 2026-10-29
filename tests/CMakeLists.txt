@@ -23,6 +23,15 @@ foreach(t ${TEST_TARGETS})
 endforeach()
 
 # 诊断工具(不是测试, 不注册给 ctest): 生成合成图 / 打印检测中间结果
+# box_probe: 用我们自己的检测器量检测框宽高比, 用于核对 ARMOR_H / ARMOR_W。
+# 不注册给 ctest(需要外部视频), 手动运行。
+add_executable(box_probe box_probe.cpp)
+aim_link(box_probe)
+if(OpenVINO_FOUND)
+  target_compile_definitions(box_probe PRIVATE HAVE_OPENVINO=1)
+  target_link_libraries(box_probe PRIVATE openvino::runtime)
+endif()
+
 add_executable(synth_dump synth_dump.cpp)
 target_link_libraries(synth_dump PRIVATE ${OpenCV_LIBS})
 target_include_directories(synth_dump PRIVATE ${CMAKE_SOURCE_DIR}/include)
