@@ -145,7 +145,7 @@ constexpr int   TRACK_CONFIRM_FRAMES  = 2;
 // 相邻板之间的 theta 只差 5~7 度(随距离变化), 于是两块板都被判成同一块,
 // 迟滞完全失效, theta 逐帧在 -2.5 和 +2.8 之间跳 -> 角速度估计炸掉 -> 抽动。
 // 降到 3 度: 小于实测板间距, 又能包容单帧噪声(通常 <1 度)。
-constexpr float SELECT_SAME_TARGET_DEG = 3.0f;
+constexpr float SELECT_SAME_TARGET_DEG = 5.0f;
 
 // ============================================================ 开火判据
 //

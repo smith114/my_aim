@@ -59,11 +59,17 @@ public:
             if (best_c * kSwitchMargin > prev_c) pick_i = prev_i;   // 迟滞
         } else {
             ++miss_cnt_;                         // 旧板这一帧没配上
-            // 没连续消失够久就**继续跟上次那个方向**(即使当前帧没这块板),
-            // 宁可这一帧不更新, 也不要在两块板之间来回切。
-            if (has_prev_ && miss_cnt_ < kSwitchHoldFrames) return -1;
         }
 
+        // ******** 永远返回一块能用的板, 绝不返回 -1 ********
+        //
+        // 曾经在这里写成"旧板没配上就 return -1, 让它等几帧别乱切"。
+        // 那是错的: 返回 -1 在 main 里等于"这一帧没有目标" -> stop_tracking(),
+        // 于是**明明画面里有板却被丢弃**。实测(10-29): armor 频繁落到 0,
+        // locked 一直在 0.0~0.4, 永远开不了火。
+        //
+        // 正确含义: "换一块板"是正常行为, 不是"没有目标"。
+        // 抑制切换应该靠上面的迟滞和换门限, 而不是靠丢弃检测。
         if (pick_i >= 0) {
             last_yaw_  = cand[pick_i].solve.yaw;
             has_prev_  = true;
@@ -78,7 +84,7 @@ private:
     static constexpr float kSwitchMargin = 2.5f;   // 新目标要好几倍才换
     // 旧板必须连续这么多帧一直看不到, 才允许换成别的板。
     // 只是"这一帧没配上"不算消失 —— 否则两块板交替可见时会来回切。
-    static constexpr int   kSwitchHoldFrames = 3;
+    static constexpr int   kSwitchHoldFrames = 3;   // 仅用于统计, 不再丢弃目标
     bool  has_prev_ = false;
     int   miss_cnt_ = 0;
     float last_yaw_ = 0.0f;
