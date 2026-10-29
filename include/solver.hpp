@@ -95,12 +95,40 @@ inline PoseResult solve_pose(const std::vector<cv::Point2f>& img_pts) {
     // 退化检查: 四点近共线 / 近似重合时 PnP 会给出完全错误的位姿, 必须提前拦掉
     if (!is_valid_quad(img_pts)) return pr;
     const auto obj = armor_object_points();
-    // 四个点共面, IPPE 专为该情形设计, 比 ITERATIVE 稳且不需初值
-    pr.ok = cv::solvePnP(obj, img_pts, camera_matrix(), distortion_coeffs(),
-                         pr.rvec, pr.tvec, false, cv::SOLVEPNP_IPPE);
-    if (!pr.ok) {   // 退化时退回迭代法
+
+    // ******** 用上一帧位姿做初值, 保证位姿连续 ********
+    //
+    // 实测问题(10-29): armor 稳定为 1.0(画面里只有一块板), 距离稳定在 5.2~5.5m,
+    // 但 th 的 **pitch 逐帧摆 ±14 度**(= 1.3 米), locked 随之从 1.0 衰减到 0.1。
+    // 一块静止靶标不可能这样上下动 —— 是**位姿在两个解之间翻转**。
+    //
+    // 原因: 装甲板是平面正方形附近的目标, IPPE 对其有两个解(正面/背面像),
+    // 两者重投影误差接近, 噪声就足以让解算器在两解间跳。IPPE 不带初值,
+    // 每帧独立求解, 所以会跳。
+    //
+    // 修法: 保留上一帧的 rvec/tvec 作为初值跑 ITERATIVE(useExtrinsicGuess=true),
+    // 它会收敛到**离上一帧最近**的那个解, 从而保持连续。
+    // 只有初值不可用时才退回 IPPE。
+    static cv::Mat  s_rvec, s_tvec;
+    static bool     s_has_prev = false;
+    if (s_has_prev) {
+        s_rvec.copyTo(pr.rvec);
+        s_tvec.copyTo(pr.tvec);
         pr.ok = cv::solvePnP(obj, img_pts, camera_matrix(), distortion_coeffs(),
-                             pr.rvec, pr.tvec, false, cv::SOLVEPNP_ITERATIVE);
+                             pr.rvec, pr.tvec, true, cv::SOLVEPNP_ITERATIVE);
+    }
+    if (!s_has_prev || !pr.ok) {
+        pr.ok = cv::solvePnP(obj, img_pts, camera_matrix(), distortion_coeffs(),
+                             pr.rvec, pr.tvec, false, cv::SOLVEPNP_IPPE);
+        if (!pr.ok) {
+            pr.ok = cv::solvePnP(obj, img_pts, camera_matrix(), distortion_coeffs(),
+                                 pr.rvec, pr.tvec, false, cv::SOLVEPNP_ITERATIVE);
+        }
+    }
+    if (pr.ok) {
+        s_rvec = pr.rvec.clone();
+        s_tvec = pr.tvec.clone();
+        s_has_prev = true;
     }
     return pr;
 }
