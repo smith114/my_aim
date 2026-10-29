@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(my_aim CXX)
 
+# 导出 compile_commands.json: 让 VSCode 的 IntelliSense 用**真实编译参数**,
+# 而不是靠猜 include 路径。学习代码时跳转/补全才准。
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
