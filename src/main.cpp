@@ -696,6 +696,24 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             // 原始测量 -> KF -> 外推
             const float raw_yaw   = candidates[follow].solve.yaw;
             raw_yaw_ex = raw_yaw;
+
+            // ---- 换板检测: 换板时重置滤波器, 避免"切换时增加补偿" ----
+            static int   s_prev_follow = -1;
+            static float s_prev_raw_y  = 0.0f;
+            const bool switched = (s_prev_follow != follow) ||
+                                  (std::fabs(raw_yaw - s_prev_raw_y) > KF_SWITCH_JUMP_DEG);
+            if (switched) {
+                kf_yaw.reset();
+                kf_pitch.reset();
+                // 只在这一帧打印, 避免刷屏(换板本来就频繁)
+                static int s_sw_cnt = 0;
+                if (++s_sw_cnt % 10 == 1) {
+                    LOG("[SWITCH] 换板/突跳, 重置滤波器(提前量清零) idx %d->%d\n",
+                        s_prev_follow, follow);
+                }
+            }
+            s_prev_follow = follow;
+            s_prev_raw_y  = raw_yaw;
         // 飞行时间补偿需要的距离与弹速(弹速无效时回退默认值)
         const float f_dist_for_lead = candidates[follow].solve.dist;
         f_dist_for_lead_log = f_dist_for_lead;

@@ -125,6 +125,40 @@ inline PoseResult solve_pose(const std::vector<cv::Point2f>& img_pts) {
                                  pr.rvec, pr.tvec, false, cv::SOLVEPNP_ITERATIVE);
         }
     }
+    // ******** 必须校验重投影误差, 否则"上一帧初值"会在跳变时害人 ********
+    //
+    // 实测(10-29): 加了初值之后 test_solver 的距离扫描
+    // (1000 -> 2000 -> 3000 -> 5000 -> 7000 mm) 第一项就解错:
+    // 用 5m 的位姿去初始化 1m 的解算, ITERATIVE 从 5m 出发收不到 1m,
+    // 结果 1.856m(误差 86%)。真实场景里"目标突然由远变近"同样会卡住。
+    //
+    // 所以: 先带初值解, 再用重投影误差验证; 超过门限就**丢弃初值, 用 IPPE 无初值重解**。
+    // 这样既保住连续性(正常跟踪时误差小, 用初值), 又不会在跳变时卡死。
+    auto reproj_rms = [&](const cv::Mat& rv, const cv::Mat& tv) -> double {
+        std::vector<cv::Point2f> proj;
+        cv::projectPoints(obj, rv, tv, camera_matrix(), distortion_coeffs(), proj);
+        if (proj.size() != img_pts.size() || proj.empty()) return 1e9;
+        double acc = 0.0;
+        for (size_t i = 0; i < proj.size(); ++i) {
+            const cv::Point2f d = proj[i] - img_pts[i];
+            acc += d.x * d.x + d.y * d.y;
+        }
+        return std::sqrt(acc / static_cast<double>(proj.size()));
+    };
+
+    constexpr double kMaxReprojPx = 3.0;   // 3 像素 RMS 以内才认为初值解可信
+    if (pr.ok && reproj_rms(pr.rvec, pr.tvec) > kMaxReprojPx) {
+        // 初值不可信 -> 无初值重解
+        cv::Mat r2, t2;
+        if (cv::solvePnP(obj, img_pts, camera_matrix(), distortion_coeffs(),
+                         r2, t2, false, cv::SOLVEPNP_IPPE)) {
+            pr.rvec = r2; pr.tvec = t2; pr.ok = true;
+        } else if (cv::solvePnP(obj, img_pts, camera_matrix(), distortion_coeffs(),
+                                r2, t2, false, cv::SOLVEPNP_ITERATIVE)) {
+            pr.rvec = r2; pr.tvec = t2; pr.ok = true;
+        }
+    }
+
     if (pr.ok) {
         s_rvec = pr.rvec.clone();
         s_tvec = pr.tvec.clone();
