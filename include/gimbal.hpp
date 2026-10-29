@@ -78,6 +78,10 @@ public:
     bool  meas_lp_inited_ = false;
     // 0.10 是现场试出来的合理区间(8~14)。再小跟随滞后明显, 再大止不住抖。
     float meas_lp_coef    = 0.10f;
+    // 上一帧下发的命令, 用于变化率限制
+    float prev_cmd_yaw_   = 0.0f;
+    float prev_cmd_pitch_ = 0.0f;
+    bool  prev_cmd_valid_ = false;
 
     float last_want_yaw   = 0.0f;
     float last_want_pitch = 0.0f;
@@ -172,6 +176,7 @@ public:
             diverged_    = false;
             grow_streak_ = 0;
             last_mag_    = 0.0f;
+            prev_cmd_valid_ = false;
             home_frozen_yaw   = meas_yaw;
             home_frozen_pitch = clamp_val(meas_pitch, pitch_lo(), pitch_hi());
             std::printf("[GIMBAL] 重新锚定包络中心 home=%.2f/%.2f (中断 %d 帧)\n",
@@ -263,6 +268,19 @@ public:
 
         cmd_yaw   = wrap_or_clamp_yaw(meas_lp_yaw + cy);
         cmd_pitch = wrap_or_clamp_pitch(meas_lp_pitch + cp);
+        // ---- 命令变化率限制: 削掉单帧突跳(抽动), 不影响稳态 ----
+        if (prev_cmd_valid_) {
+            const float dy = wrap_delta(cmd_yaw - prev_cmd_yaw_);
+            if (dy >  SERVO_CMD_SLEW_DEG) cmd_yaw = wrap360(prev_cmd_yaw_ + SERVO_CMD_SLEW_DEG);
+            if (dy < -SERVO_CMD_SLEW_DEG) cmd_yaw = wrap360(prev_cmd_yaw_ - SERVO_CMD_SLEW_DEG);
+            const float dp = cmd_pitch - prev_cmd_pitch_;
+            if (dp >  SERVO_CMD_SLEW_DEG) cmd_pitch = prev_cmd_pitch_ + SERVO_CMD_SLEW_DEG;
+            if (dp < -SERVO_CMD_SLEW_DEG) cmd_pitch = prev_cmd_pitch_ - SERVO_CMD_SLEW_DEG;
+        }
+        prev_cmd_yaw_   = cmd_yaw;
+        prev_cmd_pitch_ = cmd_pitch;
+        prev_cmd_valid_ = true;
+
         apply_envelope();   // 再套一层安全包络
         return true;
     }
