@@ -715,9 +715,11 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 }
                 t_lead_used = t_lead;
                 theta_yaw   = kf_yaw.predict_ahead(t_lead);
-                theta_pitch = kf_pitch.predict_ahead(t_lead);
+                // pitch 不外推(见 KF_LEAD_PITCH 的说明): 该轴无真实运动,
+                // 外推只会把噪声/自激放大成云台的实际动作。
+                theta_pitch = KF_LEAD_PITCH ? kf_pitch.predict_ahead(t_lead) : kf_pitch.theta();
                 lead_yaw = theta_yaw - raw_yaw;    // 实际施加的提前量(开火判据要扣掉)
-                lead_pitch = theta_pitch - raw_pitch_ex;
+                lead_pitch = theta_pitch - raw_pitch_ex;   // 关掉时接近 0
             } else {
                 theta_yaw   = raw_yaw;
                 theta_pitch = raw_pitch;
