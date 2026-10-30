@@ -724,6 +724,11 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                     kf_yaw.reseed(raw_yaw);
                     kf_pitch.reseed(raw_pitch);
                 }
+                // 换板时把伺服内部的两个低通状态也对齐到真值, 否则
+                // cmd 会跟着滞后的 meas_lp "幻影前进", 造成过冲。
+                if (switched) {
+                    gimbal.resync_switch(raw_yaw, raw_pitch + pitch_comp);
+                }
                 kf_yaw.update(raw_yaw);
                 kf_pitch.update(raw_pitch);
                 // 预测到**子弹到达时刻**: 链路延迟 + 飞行时间

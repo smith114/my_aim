@@ -131,6 +131,28 @@ public:
 
     // 一帧跟踪: 输入相机系偏差角(度, +yaw = 目标偏右, +pitch = 目标偏下)
     // 返回是否产生了新的命令
+    // ******** 换板时把内部状态对齐到真值 ********
+    //
+    // 换板会产生 5~7 度的阶跃。此时两个低通状态若继续从旧值爬, 会制造
+    // "命令幻影前进" -> 云台冲过头再回来(实测现象: "换板时猛一下/过冲")。
+    //
+    // 具体: cmd = meas_lp + 修正。meas_lp 系数只有 0.10(时间常数约 10 帧),
+    // 云台已经到位了 meas_lp 还在爬 -> cmd 继续涨 -> 过冲。
+    // 而换板那一刻我们**明明知道云台的真实姿态**, 没有理由让它从旧值爬过来。
+    //
+    // 所以: 命令基准(meas_lp)直接取当前实测角; 偏角低通(sm_*)直接取新板 theta。
+    // 注意**不能碰 meas_lp 之外的东西** —— 尤其是 prev_cmd_*, 那是 slew 的基准,
+    // 需要保留连续性。
+    void resync_switch(float theta_yaw, float theta_pitch) {
+        if (have_meas) {
+            meas_lp_yaw   = meas_yaw;
+            meas_lp_pitch = meas_pitch;
+            meas_lp_inited_ = true;
+        }
+        sm_yaw_   = theta_yaw;
+        sm_pitch_ = theta_pitch;
+    }
+
     bool track(float theta_yaw, float theta_pitch) {
         if (!have_meas) return false;   // 没有实测角就不动(避免拿错误基准乱指)
 
