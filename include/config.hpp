@@ -178,7 +178,7 @@ constexpr float SELECT_SAME_TARGET_DEG = 5.0f;
 // 赛制要求: 1 分钟打 50 发 = 0.83 发/秒, 所以 fire_flag 必须**尽量长时间保持 1**,
 // 而不是一闪一闪。掉帧/单帧丢板会让条件短暂失效, 火控那边会因此重新计时,
 // 吞吐直接砍半。所以条件失效后再保持这么几帧(约 30ms), 骑过单帧丢板。
-constexpr int   FIRE_LOCK_FRAMES     = 2;    // 2 帧(约 20ms)足以排除单帧误检
+constexpr int   FIRE_LOCK_FRAMES     = 3;    // 连续 3 帧检出才算可靠: 开火门控已不用 tr.locked, 质量过滤靠这里
 constexpr int   FIRE_HOLD_FRAMES     = 3;    // 条件失效后再保持 3 帧, 骑过丢板
 
 // 容差 = 系数 × 装甲板在当前距离下的**角宽度**。
