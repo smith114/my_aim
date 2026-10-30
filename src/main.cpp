@@ -816,9 +816,22 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                     s_dev_rate += CENTER_DEV_RATE_LP * (inst_rate - s_dev_rate);
                     s_dev_prev  = pos_dev;
 
-                    pos_dev_yaw = CENTER_PRED_ENABLE
-                                ? pos_dev + s_dev_rate * t_lead_used
-                                : pos_dev;
+                    // ******** 预测必须夹在圆的摆幅内 ********
+                    // 偏差是正弦 pos_dev = A*sin(phi), A 就是"圆"的最大偏移。
+                    // 线性外推在 |pos_dev| 接近 A 时会算出超过 A 的值 ——
+                    // 那就跑到圆外面去了(实测: 打得多了但偏, 因为追到圆外)。
+                    // 所以用**观测到的最大偏差**作为上界夹住: 数学上不可能超出圆。
+                    static float s_dev_amp = 0.0f;   // 摆幅估计(运行最大值, 缓慢衰减)
+                    const float amag = std::fabs(pos_dev);
+                    if (amag > s_dev_amp) s_dev_amp = amag;
+                    else s_dev_amp *= 0.9995f;       // 约 2000 帧衰减一半, 适应工况变化
+
+                    float pred = pos_dev + s_dev_rate * t_lead_used;
+                    if (s_dev_amp > 0.05f) {         // 摆幅还没估出来时不夹
+                        if (pred >  s_dev_amp) pred =  s_dev_amp;
+                        if (pred < -s_dev_amp) pred = -s_dev_amp;
+                    }
+                    pos_dev_yaw = CENTER_PRED_ENABLE ? pred : pos_dev;
                     center_hold_valid = true;
                 }
             } else {
