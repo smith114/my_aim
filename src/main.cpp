@@ -603,6 +603,8 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         float theta_yaw = 0.0f, theta_pitch = 0.0f;
         // 延迟补偿用的提前量(开火判据要从跟踪误差里扣掉)
         float lead_yaw = 0.0f, lead_pitch = 0.0f;
+        float pos_dev_yaw = 0.0f;   // 板相对圆心瞄准点的偏差(盯圆心策略的开火判据)
+        bool  center_hold_valid = false;  // 圆心估计是否可用
         float raw_pitch_ex = 0.0f;   // 带弹道补偿的原始 pitch, 开火判据用
         float raw_yaw_ex   = 0.0f;   // 原始 yaw, 开火判据用(lead 在块内计算)
         float t_lead_used  = 0.0f;   // 本次外推的总时间(链路+飞行), 日志用
@@ -697,6 +699,26 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             const float raw_yaw   = candidates[follow].solve.yaw;
             raw_yaw_ex = raw_yaw;
 
+            // ---- 盯圆心: 圆心绝对方位 = 云台角 + 板相对相机的方位 ----
+            // 板在此值两侧摆动, 慢速平均得到圆心。换板会带来跳变, 但低通
+            // 时间常数 0.6s 远长于单板经过时间, 所以影响有限。
+            static float s_center_abs = 0.0f;
+            static bool  s_center_init = false;
+            if (CENTER_HOLD_ENABLE && fb_fresh) {
+                float plate_abs = fb.yaw + raw_yaw;
+                while (plate_abs >  360.0f) plate_abs -= 360.0f;
+                while (plate_abs <    0.0f) plate_abs += 360.0f;
+                if (!s_center_init) { s_center_abs = plate_abs; s_center_init = true; }
+                else {
+                    float d = plate_abs - s_center_abs;
+                    while (d >  180.0f) d -= 360.0f;
+                    while (d < -180.0f) d += 360.0f;
+                    s_center_abs += CENTER_LP_COEF * d;
+                    while (s_center_abs >= 360.0f) s_center_abs -= 360.0f;
+                    while (s_center_abs <    0.0f) s_center_abs += 360.0f;
+                }
+            }
+
             // ---- 换板检测 ----
             // 换板时**只重设角度, 保留角速度**: 两块板在同一旋转体上, 转速连续,
             // 所以提前量不该断。曾经写成 reset() 把 ω 也清零, 结果提前量
@@ -766,10 +788,23 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 s_lead_lp_p += KF_LEAD_LP_COEF * (raw_lead_p - s_lead_lp_p);
                 // 换板时提前量不需要重置(转速连续), 所以不做 reset
 
-                lead_yaw   = s_lead_lp_y;                 // 实际施加的提前量
+                lead_yaw   = s_lead_lp_y;
                 lead_pitch = s_lead_lp_p;
-                theta_yaw   = raw_yaw   + lead_yaw;       // 用低通后的提前量重建瞄准角
+                theta_yaw   = raw_yaw   + lead_yaw;
                 theta_pitch = raw_pitch_ex + lead_pitch;
+
+                if (CENTER_HOLD_ENABLE && s_center_init && fb_fresh) {
+                    // 瞄准圆心: theta 换成"圆心相对当前云台角"的方位。
+                    // 这样云台几乎静止, 板转到正面时自己经过瞄准点。
+                    float c = s_center_abs - fb.yaw;
+                    while (c >  180.0f) c -= 360.0f;
+                    while (c < -180.0f) c += 360.0f;
+                    // 板离圆心瞄准点的偏差, 保留给开火判据用
+                    pos_dev_yaw = raw_yaw - c;
+                    center_hold_valid = true;
+                    theta_yaw = c;
+                    lead_yaw  = 0.0f;   // 盯圆心策略**不加提前量**: 不追, 就没有追的误差
+                }
             } else {
                 theta_yaw   = raw_yaw;
                 theta_pitch = raw_pitch;
@@ -860,8 +895,17 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         // 必须夹到 >= 0: fire.hpp 里是按平方和取模的, 负数会被平方成正数,
         // 于是"扣掉提前量"的效果完全丢失 -> 本来该开火的被判超差 -> 永久停火。
         // 实测(10-29) 就是这个: err 变成 -2.5, 平方后是 2.5, 超过容差 1.5。
-        const float err_y = std::fmax(0.0f, std::fabs(raw_yaw_ex - gimbal.aim_offset_yaw)
-                                             - std::fabs(lead_yaw));
+        // 盯圆心策略下的开火判据: 板离**圆心瞄准点**多近。
+        // 板正对镜头时这个偏差为 0, 板转到侧面时它增大。
+        // 所以它直接就是"板现在是不是在瞄准点上"的度量 —— 比"theta 减偏移"
+        // 更贴合"等板撞上来再打"的意图, 而且不依赖转速预测。
+        float err_y;
+        if (CENTER_HOLD_ENABLE && center_hold_valid) {
+            err_y = std::fabs(pos_dev_yaw);
+        } else {
+            err_y = std::fmax(0.0f, std::fabs(raw_yaw_ex - gimbal.aim_offset_yaw)
+                                   - std::fabs(lead_yaw));
+        }
         const float err_p = std::fmax(0.0f, std::fabs(raw_pitch_ex - gimbal.aim_offset_pitch)
                                              - std::fabs(lead_pitch));
         const bool  fire_ok = fire_decision(
