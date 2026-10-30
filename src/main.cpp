@@ -711,7 +711,12 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             // 0 摆动, 平均值就是圆心。**这就是要瞄的东西。**
             static float s_center_rel = 0.0f;
             static bool  s_center_init = false;
-            const bool center_upd = CENTER_HOLD_ENABLE && tr.locked && follow >= 0;
+            // 只要有板检出就更新圆心, **不要求 tr.locked 为真**。
+            // 之前门控在 locked 上: 跟踪质量差时 locked 频繁翻转,
+            // 圆心就几乎不更新, 停在旧值上越偏越远 —— 实测 err 达 2~3.8 度
+            // (tol 只有 0.67), 于是永远不开火。
+            // 圆心是**慢变量**, 用平均来抑噪, 不需要跟踪器确认。
+            const bool center_upd = CENTER_HOLD_ENABLE && follow >= 0;
             if (center_upd) {
                 if (!s_center_init) { s_center_rel = raw_yaw; s_center_init = true; }
                 else s_center_rel += CENTER_LP_COEF * (raw_yaw - s_center_rel);
