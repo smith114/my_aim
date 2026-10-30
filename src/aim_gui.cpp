@@ -30,6 +30,7 @@
 #include "config.hpp"
 #include "fire.hpp"
 #include "kf.hpp"
+#include "aim_core.hpp"
 #include "gimbal.hpp"
 #include "hik_camera.hpp"
 #include "protocol.hpp"
@@ -79,11 +80,42 @@ static void head(cv::Mat& m, int& y, const char* t, const cv::Scalar& col) {
 // 现场调出来的一组滑条值应该能存下来, 下次直接加载, 不用再试一遍。
 // 纯文本 key=value, 人也能看能改。
 // 中性文件名: my_aim 也读它, 叫 aim_gui 会误导
-static const char* kCfgPath = "aim_params.cfg";
+// 参数文件路径: 原来是相对路径 "aim_params.cfg", 依赖启动时的当前目录。
+// 从 ~/桌面 或别处启动就找不到文件, 于是**滑条全部落回默认值** ——
+// 这就是"每次都是默认值"的原因。
+// 改为: 依次在 当前目录 / 可执行文件所在目录 / 其父目录 / $HOME/myaim 查找。
+static std::string resolve_cfg_path() {
+    const char* kName = "aim_params.cfg";
+    std::vector<std::string> cands;
+    cands.push_back(kName);
+    // 可执行文件目录及其上级(可执行文件在 build/ 下, 配置在上一级)
+    {
+        char buf[4096];
+        const ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (n > 0) {
+            buf[n] = '\0';
+            std::string exe(buf);
+            const size_t slash = exe.find_last_of('/');
+            if (slash != std::string::npos) {
+                const std::string dir = exe.substr(0, slash);
+                cands.push_back(dir + "/" + kName);
+                const size_t slash2 = dir.find_last_of('/');
+                if (slash2 != std::string::npos) cands.push_back(dir.substr(0, slash2) + "/" + kName);
+            }
+        }
+    }
+    if (const char* h = ::getenv("HOME")) cands.push_back(std::string(h) + "/myaim/" + kName);
+    for (const auto& c : cands) {
+        std::FILE* f = std::fopen(c.c_str(), "r");
+        if (f) { std::fclose(f); return c; }
+    }
+    return kName;   // 都不存在就用相对名(保存时会新建在当前目录)
+}
+static std::string g_cfg_path = resolve_cfg_path();
 
 static void save_knobs() {
-    std::ofstream f(kCfgPath);
-    if (!f) { std::printf("[ERR] 无法写 %s\n", kCfgPath); return; }
+    std::ofstream f(g_cfg_path.c_str());
+    if (!f) { std::printf("[ERR] 无法写 %s\n", g_cfg_path.c_str()); return; }
     f << "conf="      << tb_conf      << "\n"
       << "enemy="     << tb_enemy     << "\n"
       << "off_yaw="   << tb_off_yaw   << "\n"
@@ -95,10 +127,10 @@ static void save_knobs() {
       << "smooth="    << tb_smooth    << "\n"
       << "deadband="  << tb_deadband  << "\n"
       << "meas_lp="   << tb_measlp    << "\n";
-    std::printf("[CFG] 已保存到 %s\n", kCfgPath);
+    std::printf("[CFG] 已保存到 %s\n", g_cfg_path.c_str());
 }
 static void load_knobs() {
-    std::ifstream f(kCfgPath);
+    std::ifstream f(g_cfg_path.c_str());
     if (!f) return;
     std::string line;
     while (std::getline(f, line)) {
@@ -118,7 +150,7 @@ static void load_knobs() {
         else if (k == "deadband")  tb_deadband  = v;
         else if (k == "meas_lp")   tb_measlp    = v;
     }
-    std::printf("[CFG] 已从 %s 加载\n", kCfgPath);
+    std::printf("[CFG] 已从 %s 加载\n", g_cfg_path.c_str());
 }
 
 
@@ -275,23 +307,45 @@ int main(int argc, char** argv) {
         gimbal.aim_offset_yaw   = static_cast<float>(tb_off_yaw   - 100) / 10.0f;
         gimbal.aim_offset_pitch = static_cast<float>(tb_off_pitch - 100) / 10.0f;
 
-        float th_y = 0.0f, th_p = 0.0f, dist = 0.0f;
-        float raw_y = 0.0f, raw_p = 0.0f;   // 滤波前的原始测量, 用于对照
+        // ******** 瞄准决策统一走 AimCore ********
+        // 这里**不再自己实现**滤波/提前量/盯圆心。之前 GUI 自己写了一份,
+        // 实车那侧后来陆续加了盯圆心、提前量低通、换板重设、追赶抑制、
+        // 偏差外推, GUI 一条都没跟上 —— 结果操作手在 GUI 里调的参数验的是
+        // 另一个算法。现在两边调同一个 step()。
+        AimInput ain;
+        ain.raw_yaw    = (follow >= 0 && follow < static_cast<int>(cand.size()))
+                       ? cand[follow].solve.yaw : 0.0f;
+        ain.raw_pitch  = (follow >= 0 && follow < static_cast<int>(cand.size()))
+                       ? cand[follow].solve.pitch : 0.0f;
+        ain.follow     = follow;
+        ain.dist_m     = (follow >= 0 && follow < static_cast<int>(cand.size()))
+                       ? cand[follow].solve.dist : 0.0f;
+        ain.bullet_spd = BULLET_SPEED_DEFAULT;
+        ain.dt         = static_cast<float>(dt);
+        ain.cmd_yaw    = gimbal.cmd_yaw;
+        ain.cmd_pitch  = gimbal.cmd_pitch;
+        ain.fb_yaw     = gimbal.meas_yaw;
+        ain.fb_pitch   = gimbal.meas_pitch;
+        ain.fb_fresh   = gimbal.have_meas;
+        // latency 滑条覆盖 config 的 KF_LATENCY_S 由 main 侧负责; GUI 这里
+        // AimCore 内部用 KF_LATENCY_S, 所以把滑条值写进全局暂不可行,
+        // 保留滑条仅作对照显示(实车以 config 为准)。
+
+        // 跨帧保持状态(滤波/圆心/提前量低通都在里面)
+        static AimCore aimcore;
+        const AimOutput aout = aimcore.step(ain);
+        const float th_y = aout.theta_yaw;
+        const float th_p = aout.theta_pitch;
+        const float dist = ain.dist_m;
+        const float raw_y = ain.raw_yaw;
+        const float raw_p = ain.raw_pitch;
+        const float pos_dev = aout.pos_dev;
+
         if (follow >= 0 && follow < static_cast<int>(cand.size())) {
-            raw_y = cand[follow].solve.yaw;
-            raw_p = cand[follow].solve.pitch;
-            dist  = cand[follow].solve.dist;
-            kf_yaw.predict(static_cast<float>(dt));
-            kf_pitch.predict(static_cast<float>(dt));
-            kf_yaw.update(raw_y);
-            kf_pitch.update(raw_p);
-            th_y = kf_yaw.predict_ahead(static_cast<float>(tb_lat_ms) / 1000.0f);
-            th_p = kf_pitch.predict_ahead(static_cast<float>(tb_lat_ms) / 1000.0f);
             if (fresh && vis) gimbal.track(th_y, th_p);
             else if (fresh)   gimbal.stop_tracking();
         } else {
-            kf_yaw.reset();
-            kf_pitch.reset();
+            aimcore.on_target_lost(MAX_LOST_FRAMES + 1);
             selector.reset();
             gimbal.stop_tracking();
         }
