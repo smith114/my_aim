@@ -699,24 +699,22 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
             const float raw_yaw   = candidates[follow].solve.yaw;
             raw_yaw_ex = raw_yaw;
 
-            // ---- 盯圆心: 圆心绝对方位 = 云台角 + 板相对相机的方位 ----
-            // 板在此值两侧摆动, 慢速平均得到圆心。换板会带来跳变, 但低通
-            // 时间常数 0.6s 远长于单板经过时间, 所以影响有限。
-            static float s_center_abs = 0.0f;
+            // ---- 盯圆心(相机系版本) ----
+            // 圆心就是板在**相机坐标**里摆动的平均值, 不需要绝对方位。
+            //
+            // 曾经写成 center_abs = 低通(fb.yaw + raw_yaw), 那是错的:
+            // fb 有通信延迟, raw_yaw 有相机+推理延迟, 云台一转两条路径就不再
+            // 守恒 —— 转速 300 度/秒乘延迟差 50ms 约 15 度, 实测 drifted 18 度,
+            // 然后因为瞄偏了去猛追, 猛追又进一步污染估计(正反馈)。
+            //
+            // 只有图像数据时没有延迟失配问题: 云台把圆心压到 0, 板的方位就围绕
+            // 0 摆动, 平均值就是圆心。**这就是要瞄的东西。**
+            static float s_center_rel = 0.0f;
             static bool  s_center_init = false;
-            if (CENTER_HOLD_ENABLE && fb_fresh) {
-                float plate_abs = fb.yaw + raw_yaw;
-                while (plate_abs >  360.0f) plate_abs -= 360.0f;
-                while (plate_abs <    0.0f) plate_abs += 360.0f;
-                if (!s_center_init) { s_center_abs = plate_abs; s_center_init = true; }
-                else {
-                    float d = plate_abs - s_center_abs;
-                    while (d >  180.0f) d -= 360.0f;
-                    while (d < -180.0f) d += 360.0f;
-                    s_center_abs += CENTER_LP_COEF * d;
-                    while (s_center_abs >= 360.0f) s_center_abs -= 360.0f;
-                    while (s_center_abs <    0.0f) s_center_abs += 360.0f;
-                }
+            const bool center_upd = CENTER_HOLD_ENABLE && tr.locked && follow >= 0;
+            if (center_upd) {
+                if (!s_center_init) { s_center_rel = raw_yaw; s_center_init = true; }
+                else s_center_rel += CENTER_LP_COEF * (raw_yaw - s_center_rel);
             }
 
             // ---- 换板检测 ----
@@ -793,17 +791,14 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 theta_yaw   = raw_yaw   + lead_yaw;
                 theta_pitch = raw_pitch_ex + lead_pitch;
 
-                if (CENTER_HOLD_ENABLE && s_center_init && fb_fresh) {
-                    // 瞄准圆心: theta 换成"圆心相对当前云台角"的方位。
-                    // 这样云台几乎静止, 板转到正面时自己经过瞄准点。
-                    float c = s_center_abs - fb.yaw;
-                    while (c >  180.0f) c -= 360.0f;
-                    while (c < -180.0f) c += 360.0f;
-                    // 板离圆心瞄准点的偏差, 保留给开火判据用
-                    pos_dev_yaw = raw_yaw - c;
+                if (CENTER_HOLD_ENABLE && s_center_init) {
+                    // 瞄准圆心(相机系): theta 直接取圆心的相机方位。
+                    // 云台把这一项压到 0 就实现了"盯住旋转中心"。
+                    theta_yaw = s_center_rel;
+                    lead_yaw  = 0.0f;      // 盯圆心不加提前量: 不追, 就没有追的误差
+                    // 板相对圆心的偏差 = 开火判据(板现在是不是正对镜头)
+                    pos_dev_yaw      = raw_yaw - s_center_rel;
                     center_hold_valid = true;
-                    theta_yaw = c;
-                    lead_yaw  = 0.0f;   // 盯圆心策略**不加提前量**: 不追, 就没有追的误差
                 }
             } else {
                 theta_yaw   = raw_yaw;
