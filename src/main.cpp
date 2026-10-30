@@ -953,7 +953,14 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 static_cast<double>(fire_tolerance_deg(f_dist > 0.1f ? f_dist : 1.0f)),
                 static_cast<double>(f_dist), static_cast<double>(f_speed));
         }
-        const int32_t fire = fire_ok ? 1 : 0;
+// fire_flag 用"保持"而不是每帧重算: 赛制要求 1 分钟 50 发, 需要 fire_flag
+        // 尽量长时间为 1。条件短暂失效(单帧丢板/跟踪抖)时继续输出 1 几帧,
+        // 避免火控那边反复重新计时导致吞吐减半。
+        static int s_fire_hold = 0;
+        int32_t fire;
+        if (fire_ok) { fire = 1; s_fire_hold = FIRE_HOLD_FRAMES; }
+        else if (s_fire_hold > 0) { fire = 1; --s_fire_hold; }
+        else { fire = 0; }
         link.set_target(gimbal.cmd_yaw, gimbal.cmd_pitch, fire);
 
         // ------------------------------------------------ 可视化
