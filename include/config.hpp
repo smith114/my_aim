@@ -386,7 +386,7 @@ constexpr float CENTER_LP_COEF = 0.008f;   // 0.015 时瞄准会"飘"(圆心被�
 // 这正是"填补飞行时间"的预测, 但作用在**偏差**上而不是板的绝对方位,
 // 所以不引入追板的那些误差。已知 5m/22m/s 飞行约 0.24 秒,
 // 30 度/秒转速下偏差只变约 0.25 度(板宽 1.5 度), 线性外推足够准。
-constexpr bool  CENTER_PRED_ENABLE = false;   // 第二轮实测: 关掉预测
+constexpr bool  CENTER_PRED_ENABLE = true;    // **必须为 true**: 实测(10-30 第二轮)关掉后"直接乱打"
 
 // 偏差变化率的低通系数(0.25 -> 约 4 帧, 快速响应又不至于被单帧噪声带跳)
 constexpr float CENTER_DEV_RATE_LP = 0.25f;
