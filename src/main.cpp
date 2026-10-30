@@ -924,13 +924,20 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
         }
         const float err_p = std::fmax(0.0f, std::fabs(raw_pitch_ex - gimbal.aim_offset_pitch)
                                              - std::fabs(lead_pitch));
+        // 开火判据里的"已锁定"用 **(follow >= 0) 即本帧检出了板**, 而不是 tr.locked。
+        //
+        // 实测(10-30): 旋转靶的检出是**间歇**的(板转侧面就丢几帧), 跟踪器的
+        // locked 标志因此在 0.2~1.0 之间飘, streak 最高只到 2, 永远达不到门限。
+        // 而日志显示**偏差最小的那些帧恰好 locked=0** —— 也就是瞄得最准的时候
+        // 反而因为 locked 被挡下, 一发都开不出去。
+        // 防误检由 FIRE_LOCK_FRAMES 连续帧数负责, 不需要再靠 locked。
         const bool  fire_ok = fire_decision(
-            (ENABLE_FIRE || cli_enable_fire), tr.locked, vision_on, fb_fresh,
+            (ENABLE_FIRE || cli_enable_fire), (follow >= 0), vision_on, fb_fresh,
             (follow >= 0), f_dist, err_y, err_p, f_speed, fire_lock_streak);
 
-        // 连击计数: 基本条件都满足才累加(与判据里的锁定帧数门限配合)
-        const bool f_base = (ENABLE_FIRE || cli_enable_fire) && tr.locked && vision_on &&
-                            fb_fresh && (follow >= 0) && f_dist > 0.5f &&
+        // 连击计数: 同样用检出而不是 tr.locked, 否则 streak 永远涨不上去
+        const bool f_base = (ENABLE_FIRE || cli_enable_fire) && (follow >= 0) && vision_on &&
+                            fb_fresh && f_dist > 0.5f &&
                             f_dist <= FIRE_MAX_DIST_M && f_speed > FIRE_MIN_BULLET_SPEED;
         if (f_base) {
             if (fire_lock_streak < FIRE_LOCK_FRAMES) ++fire_lock_streak;

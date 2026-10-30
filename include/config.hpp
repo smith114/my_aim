@@ -370,7 +370,7 @@ constexpr bool  CENTER_HOLD_ENABLE = true;
 // 圆心方位的低通系数。板在圆心两侧摆动, 慢速平均即得圆心。
 // 0.015 在 110fps 下时间常数约 0.6 秒 —— 远长于单块板经过的时间(约 0.3s),
 // 又远短于操作手手动改变瞄准的时间。
-constexpr float CENTER_LP_COEF = 0.015f;
+constexpr float CENTER_LP_COEF = 0.008f;   // 0.015 时瞄准会"飘"(圆心被换板/单帧噪声带偏), 放慢到 0.008 更稳
 
 // ******** 用旋转模型预测"板什么时候经过瞄准点" ********
 //
