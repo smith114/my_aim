@@ -797,7 +797,23 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                     theta_yaw = s_center_rel;
                     lead_yaw  = 0.0f;      // 盯圆心不加提前量: 不追, 就没有追的误差
                     // 板相对圆心的偏差 = 开火判据(板现在是不是正对镜头)
-                    pos_dev_yaw      = raw_yaw - s_center_rel;
+                    const float pos_dev = raw_yaw - s_center_rel;
+
+                    // 偏差的变化率(低通), 用于外推到子弹到达时刻。
+                    // 这是"用旋转模型预测"的最小实现: 正弦在零点附近近似线性,
+                    // 而 0.24 秒内偏差只变约 0.25 度(板宽 1.5 度), 足够。
+                    static float s_dev_rate = 0.0f;
+                    static float s_dev_prev = 0.0f;
+                    static bool  s_dev_init = false;
+                    if (!s_dev_init) { s_dev_prev = pos_dev; s_dev_init = true; }
+                    const float dt_safe = std::fmax(kf_dt, 1e-4f);
+                    const float inst_rate = (pos_dev - s_dev_prev) / dt_safe;
+                    s_dev_rate += CENTER_DEV_RATE_LP * (inst_rate - s_dev_rate);
+                    s_dev_prev  = pos_dev;
+
+                    pos_dev_yaw = CENTER_PRED_ENABLE
+                                ? pos_dev + s_dev_rate * t_lead_used
+                                : pos_dev;
                     center_hold_valid = true;
                 }
             } else {
