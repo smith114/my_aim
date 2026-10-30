@@ -1,435 +1,580 @@
-# 代码导览 —— 从零读懂这套自瞄
+# 自瞄代码学习指南
 
-> 目标：验收时能讲清**每一环在干什么、为什么这么干、坏了怎么查**。
-> 建议顺序：本文 → 按下面顺序读代码 → 跑一遍调试工具。
+> 读这份文档时请对照 VSCode 打开 `C:\Users\badtime\Desktop\deepseek-harness\srm-selfaim\`。
+> 所有行号对应当前锁定版本（`5c8d362`）。
+> 本文只讲**代码怎么组织的、每个功能在哪几行**，不复制代码。
 
 ---
 
-## 一、先建立一张全局图
+## 一、先看全局：一帧数据怎么走完
 
 ```
-      相机 (Hikrobot 1440x1080, 2ms 曝光)
-         │
-         │  BayerRG8 原始帧
-         ▼
-   hik_camera.hpp        取帧 + 转 BGR + 180° 旋转(IMG_DIR=3)
-         │
-         ▼
-   yolo_detector.hpp     YOLOv8 (416x416) → [N,14] 输出
-         │                每行: box(4) + cls(2) + keypoint(8)
-         ▼
-   yolo_armor.hpp        把 keypoint 4 点组装成装甲板；
-         │                颜色过滤 + 长宽比/面积校验(排除灯和反光)
-         ▼
-   solver.hpp            solvePnP(IPPE) + 畸变校正
-         │                → theta_yaw / theta_pitch (相机系偏角)
-         │                → dist (米)
-         ▼
-   tracker.hpp           三态状态机 DETECT→TRACK→LOST
-         │                帧间关联(60px 门限) + 确认计数
-         ▼
-   select.hpp            多块板时选哪块(板面朝向 + 迟滞 + 1.35倍换门限)
-         │
-         ▼
-   kf.hpp                角度卡尔曼 + 外推 80ms(补链路延迟)
-         │
-         ▼
-   gimbal.hpp            ★核心控制律
-         │                cmd = 实测角(低通) + 限幅修正
-         ▼
-   protocol.hpp          18 字节报文，100Hz 发给下位机
-         │
-         ▼
-      下位机 (mode=1 才接受角度；fire_flag 只是"建议开火")
+                        ┌─────────────────────────────────────────────┐
+  相机 1440x1080        │  main.cpp 的主循环                          │
+  BayerRG8              │                                             │
+      │                 │  while (g_stop == 0)                        │
+      ▼                 │    frame = camera.read()      ← hik_camera   │
+  hik_camera.hpp ───────┤    boxes = yolo->detect()     ← yolo_detector │
+      │                 │    armors = yolo_to_armors()  ← yolo_armor    │
+      ▼                 │    cand[i].solve = solve_pnp()← solver        │
+  yolo_detector.hpp     │    tr = tracker.update()      ← tracker       │
+      │                 │    follow = selector.pick()   ← select        │
+      ▼                 │    aim = aimcore.step()       ← aim_core      │
+  yolo_armor.hpp        │    gimbal.track()             ← gimbal        │
+      │                 │    fire_ok = fire_decision()  ← fire          │
+      ▼                 │    link.set_target()          ← protocol      │
+  solver.hpp            │    imshow / LOG                             │
+      │                 └─────────────────────────────────────────────┘
+      ▼                                   │
+  tracker.hpp                             ▼
+      │                          串口 18 字节/帧, 100 Hz
+      ▼                                   │
+  select.hpp                              ▼
+      │                            下位机（火控）
+      ▼                                   │
+  aim_core.hpp  ── theta_yaw/pitch ──► gimbal.hpp
+                                          │
+                                          ▼
+                                    protocol.hpp
 ```
 
-**一句话概括**：相机看到板 → 算出"板偏我光轴多少度" → 把这个偏差变成云台角度指令 → 下位机执行 → 回到零偏差。
+**一句话概括：**
+> 相机看到装甲板 → PnP 算出"板偏多少度" → 决定瞄哪块 → 加补偿 → 变成云台角 → 发给下位机 → 偏差归零。
+
+**闭环的含义**：`theta` 是"板相对光轴的角度"，云台转过去它就会变小。
+所以控制目标永远是 **让 `theta` → 0**（盯圆心策略下是"让圆心 → 0"）。
 
 ---
 
-## 二、按顺序读这 8 个文件
+## 二、文件清单：每个文件干什么，功能在哪
 
-### 1. `include/config.hpp` —— 所有常量（先读这个，建立名词表）
+### 2.1 配置层
 
-**这是唯一参数来源。** 分 12 组，每组都有中文注释说明**为什么是这个值**。
+#### `include/config.hpp`（约 660 行）
+**唯一的参数总表**。所有魔法数字都在这里，改参数不用翻代码。
 
-读的时候注意：**注释里带"实测"字样的都是现场试出来的，别随便改**。特别是：
+| 参数组 | 内容 |
+|---|---|
+| 相机 | `CAM_FX/FY/CX/CY`、畸变 `CAM_K1/K2/P1/P2/K3`、`CAM_EXPOSURE_US`、`IMG_DIR` |
+| 几何 | `ARMOR_W=135`、`ARMOR_H=56` |
+| 检测 | `YOLO_CONF_THRESH`、`YOLO_NMS_THRESH`、`YOLO_PROFILE_SELECT` |
+| 跟踪 | `TRACK_ASSOC_PX`、`TRACK_CONFIRM_FRAMES`、`MAX_LOST_FRAMES` |
+| 选板 | `SELECT_SAME_TARGET_DEG` |
+| 滤波 | `KF_ENABLE`、`KF_LATENCY_S`、`KF_Q_ANGLE`、`KF_Q_RATE`、`KF_R_ANGLE` |
+| 延迟补偿 | `KF_LEAD_FLIGHT_TIME`、`KF_LEAD_PITCH`、`KF_LEAD_LP_COEF`、`KF_LEAD_SUPPRESS_DEG`、`KF_MAX_LEAD_DEG` |
+| 换板 | `KF_SWITCH_JUMP_DEG` |
+| 盯圆心 | `CENTER_HOLD_ENABLE`、`CENTER_LP_COEF`、`CENTER_PRED_ENABLE`、`CENTER_DEV_RATE_LP` |
+| 伺服 | `SERVO_DIR_YAW/PITCH`、`SERVO_GAIN`、`SERVO_MAX_CORR_DEG`、`SERVO_CMD_SLEW_DEG`、`GIMBAL_DEADBAND*`、`GIMBAL_PITCH_MIN/MAX` |
+| 开火 | `ENABLE_FIRE`、`FIRE_TOL_FRAC`、`FIRE_LOCK_FRAMES`、`FIRE_HOLD_FRAMES`、`FIRE_MAX_DIST_M` |
+| 显示 | `DISPLAY_EVERY_N`、`DISPLAY_SCALE` |
 
-| 参数 | 值 | 为什么是这个值 |
-| --- | --- | --- |
-| `SERVO_DIR_YAW` | -1 | 实测：yaw 增大 → 镜头向左 |
-| `SERVO_DIR_PITCH` | **+1** | 实测：pitch 增大 → 镜头向下；且日志证明 -1 会顶到行程上限 |
-| `AIM_PITCH_OFFSET_DEG` | **3.7** | 枪口在相机下方 + 5m 下坠 253mm 的合成补偿 |
-| `ARMOR_H` | **57** | keypoint 实际竖向跨度，不是板的 125mm！见下文 |
-| `GIMBAL_PITCH_MIN/MAX` | -35.8 / 26.1 | 实测机械行程 |
-
-**两个最容易讲错的点**（验收可能问）：
-
-**Q: 为什么 `ARMOR_H` 是 57 而不是板高 125？**
-> YOLO 的 4 个 keypoint 只跨了板的上半部分（灯条发光区），实测 5.4m 处 box 是 47×19 px，
-> 而 140×125mm 的板应该是 47×42 px。宽高比对不上会让 PnP 强行加俯仰来凑，
-> pitch 就算不准。57 = 140 × 19/47，是 keypoint 实际描述的竖向跨度。
-
-**Q: 为什么两轴符号相反（yaw -1 / pitch +1）？**
-> 因为"命令角增大"对两轴意味着**相反的物理动作**：yaw 增大向左，pitch 增大向下。
-> 而 `theta > 0` 对两轴都表示"目标在正方向"（右/下）。
-> 所以 yaw 要"往左转去追右边的目标"→ 减 yaw；pitch 要"往下转去追下面的目标"→ 加 pitch。
+**读法**：先读这个文件，每条注释都写了"为什么是这个值"和踩过的坑。
+**这是全项目信息密度最高的文件。**
 
 ---
 
-### 2. `include/solver.hpp` —— PnP 解算（约 130 行，最短）
+### 2.2 感知层
 
-**输入**：装甲板 4 个像素角点
-**输出**：`SolveResult { yaw, pitch, dist, px, py, pz, yaw_raw, ok }`
+#### `include/hik_camera.hpp`（219 行）
+海康工业相机的封装：枚举设备、设置像素格式 `BayerRG8`、固定曝光/增益、取帧、Bayer 转 BGR。
 
-关键代码三行：
+- 相机打不开时返回 `-2147483133`（`MV_E_ACCESS_DENIED`）= **被别的进程占用**
+- `IMG_DIR = 3` 是 180° 旋转，**只对实相机帧生效**（对文件输入不生效，否则离线测试全废）
+
+#### `include/yolo_detector.hpp`（206 行）
+OpenVINO 推理封装。核心是 `YoloProfile` 结构，描述**模型的输出布局**：
 
 ```cpp
-out.yaw   = atan2(tvec.x, tvec.z) * 180/π;   // 目标在右为正
-out.pitch = atan2(tvec.y, tvec.z) * 180/π;   // 目标在下为正（OpenCV +y 向下）
-out.dist  = |tvec| / 1000;                    // mm -> m
+struct YoloProfile {
+    std::string model_xml;
+    int   input_size;      // 416 / 640
+    int   class_num;
+    int   class_start;     // 类别分数在输出里的偏移
+    int   corner_start;    // 4 个 keypoint 的偏移
+    bool  class_is_logit;  // 是否已过 sigmoid
+    const char* class_names[...];
+};
 ```
 
-**为什么先试 `SOLVEPNP_IPPE` 再退回 `ITERATIVE`**：IPPE 是专门给平面四点的闭式解，快且稳；失败才用迭代法。
+- `YOLO_PROFILE_YOLOV8_2CLASS`：416 输入，输出 `[1,14,3549]`（3549 = 52²+26²+13²，**这个数字反证输入是 416**）
+- `YOLO_PROFILE_YOLO11_38CLASS`：640 输入，输出 `[1,50,8400]`
 
-**`yaw_raw` 是干什么的**：由旋转向量算出的**板面朝向**，用于判断"看到的是哪一块板"（`select.hpp` 用它挑更正对相机的板）。
+**这里是"换模型最容易踩坑"的地方** —— 三套模型的输出布局完全不同。
 
-**怎么调试**（关键！）：`aim_gui` 里有一行 `pnp-pixel`
+#### `include/yolo_armor.hpp`（132 行）
+把 YOLO 的原始输出（分数 + 4 个角点）转成 `Armor` 结构，并按 `enemy` 颜色过滤。
 
-```
-raw meas   -0.16 / 0.09      ← PnP 算的
-pixel th   -0.16 / 0.09      ← 用检测框中心 + 内参直接算的
-pnp-pixel   0.00 / 0.00  match
-```
+- **关键**：4 个 keypoint 的顺序要归一化（`sort_armor_points`），否则 PnP 会解出翻转的位姿
+- `bars=0.0` 这个日志字段是历史遗留（灯条法已删），恒为 0
 
-**两条完全独立的路径算同一个量，必须一致。** 不一致说明角点/内参/PnP 有问题，
-那闭环就是在追一个假角度。**这个检查在调试中救过一次命**（当时以为是符号问题，实际是几何模型错）。
+#### `include/armor.hpp`（251 行）
+装甲板的数据结构 + 几何工具：`Armor`、`ArmorType`、角点排序、四点退化检查（近共线时 PnP 会给出完全错误的位姿）。
 
 ---
 
-### 3. `include/yolo_detector.hpp` + `yolo_armor.hpp` —— 检测
+### 2.3 解算层
 
-**三套模型布局**（`make_yolo_profile()`），差异在这里：
+#### `include/solver.hpp`（198 行）
 
-| 模型 | 输入 | 输出 | box | cls | keypoint | 类别 |
-| --- | --- | --- | --- | --- | --- | --- |
-| yolo11 | 640 | [1,50,8400] | 0-3 | 4-41 | 42-49 | 38 |
-| **yolov8（当前用）** | **416** | **[1,14,3549]** | **0-3** | **4-5** | **6-13** | **2(蓝/红)** |
-| yolov5 | 640 | [1,25200,22] | 0-3 | 12-21 | 4-11 | 10（**未实现 anchor 解码，已删模型**） |
+| 功能 | 位置 |
+|---|---|
+| PnP 用的物体点（**135 × 56**） | `armor_object_points()` :48 |
+| 位姿解算（含连续性 + 重投影校验） | `solve_pose()` :92 |
+| 位姿 → 角度/距离 | `solve_pnp()` :171 |
 
-**输出方向自动判别**：`[N,attrs]` 还是 `[attrs,N]` 靠比较两个维度大小。
+**`solve_pose()` 里的三个设计点：**
 
-**三个防误检的过滤**（都踩过坑，必须能讲）：
+1. **用上一帧位姿做初值**（`SOLVEPNP_ITERATIVE` + `useExtrinsicGuess`）
+   原因：平面近正方形目标的 IPPE 有**两个解**（正/背面），重投影误差几乎相同，
+   每帧独立求解会跳变 → 实测 `pitch` 摆 ±14°。
+
+2. **重投影误差校验**（超过 3 px RMS 就丢弃初值重解）
+   原因：初值会让 ITERATIVE 在大跳变时卡住 —— 实测 1m 的靶标解成 1.86m。
+
+3. **IPPE 兜底**：没有上一帧、或初值解校验不过时用 IPPE。
+
+**结果结构** `SolveResult{yaw, pitch, dist, px, py, pz, yaw_raw, ok}`：
+- `yaw/pitch` = 相机系偏角（度）
+- `yaw_raw` = 板面朝向（正对时接近 0），用于选板
+- `dist` = 距离（米）
+
+---
+
+### 2.4 跟踪层
+
+#### `include/tracker.hpp`（172 行）
+跨帧关联：把这一帧的检测和上一帧的目标配对（`TRACK_ASSOC_PX` 像素门限），
+连续 `TRACK_CONFIRM_FRAMES` 帧配上才算 `locked`，`MAX_LOST_FRAMES` 帧配不上就丢弃。
+
+输出 `TrackResult{cand_index, locked, state, lost_count}`。
+
+⚠️ **`locked` 这个标志对外不可靠**：旋转靶的检测是间歇的，`locked` 会在 0.2~1.0 之间飘。
+所以开火门控**不用它**（见阶段 3）。
+
+#### `include/select.hpp`（84 行）
+多块板时选哪一块。
+
+`pick()` :30 —— 代价函数：
+```cpp
+cost = 0.15 * |yaw_raw|     // 板面朝向（次要）
+     + 1.0  * |theta - last| // 与上次选中的连续性（主导）
+```
+外加 `kSwitchMargin = 2.5`（新目标要好几倍才换）。
+
+**两个踩过的坑写在注释里：**
+- 连续性权重原来是 0.5，导致两块板来回切 → `theta` 跳 5~7° → 卡尔曼角速度炸掉
+- 曾经在这里 `return -1`（"等几帧别乱切"），结果等于告诉主程序"没有目标"，把有效检测丢了
+
+#### `include/kf.hpp`（165 行）
+角度卡尔曼，两状态（角度 + 角速度）。
+
+| 函数 | 位置 | 干什么 |
+|---|---|---|
+| `predict(dt)` | :55 | 状态外推 |
+| `update(z)` | :93 | 测量更新，带 12° 新息门限 |
+| `reseed(z)` | :84 | **换板时重设角度、保留角速度** |
+| `predict_ahead(L)` | :135 | 外推 L 秒，带门限和上限 |
+| `rate_trusted()` | :158 | 收敛 ≥5 帧才信任角速度 |
+
+**`reseed` 的物理依据**：两块板在同一旋转体上，**角速度相同**，只有角度不同。
+所以换板只重设角度。用 `reset()` 会把角速度清零 → 提前量从 9.5° 掉到 0 再涨回来。
+
+**单位**：`omega_` 是**度/秒**，不是弧度。这里我搞错过一次（日志乘了 57.3）。
+
+---
+
+### 2.5 决策层
+
+#### `include/aim_core.hpp`（149 行）
+**瞄准决策的唯一实现** —— `aim_gui` 已调用它。
+
+`AimCore::step(AimInput)` :55，输入本帧测量量，输出送伺服的角度：
 
 ```cpp
-1. 颜色过滤    filter_by_color()      顶灯是白色/青白，只保留敌方颜色
-2. 置信度      YOLO_CONF_THRESH=0.45  0.30 时反光能过阈值
-3. 几何校验    长宽比 ∈ [0.45, 2.6]   板是 140/57=2.46，灯罩是任意形状
-              面积 ≥ 100 px²         排除远处反光小亮斑
+struct AimInput {
+    float raw_yaw, raw_pitch;   // 选中板的偏角
+    int   follow;               // 选中下标, -1 = 无目标
+    float dist_m, bullet_spd;
+    float dt;
+    float cmd_yaw, cmd_pitch;   // 上一条命令（判断云台是否在追赶）
+    float fb_yaw,  fb_pitch;    // 实测姿态
+    bool  fb_fresh;
+};
 ```
 
-**怎么调试**：
+`step()` 内部四段：
 
-```bash
-./build/aim_gui       # camera 窗口顶部: yolo=N solved=M
+| 段 | 位置 | 内容 |
+|---|---|---|
+| ① 换板检测 | :64 起 | 下标变了或 `theta` 跳 >4° |
+| ② 预测外推时长 | ~:70 | `t_lead = 链路 80ms + 距离/弹速` |
+| ③ 卡尔曼 + 提前量 | ~:95 | 换板 reseed、追赶抑制、提前量低通 |
+| ④ 盯圆心 | ~:120 | 圆心平均、偏差外推、夹紧圆内 |
+
+**⚠️ 重要现状**：`main.cpp` 里**还有一份等价的内联副本**（:719 起）。
+`AimCore` 是从它逐行抽出来的，目前两者逻辑一致。
+**但如果只改一边就会分叉** —— 这是已知待办。
+
+#### `include/fire.hpp`（47 行）
+纯数学，可离线测试。
+
+| 函数 | 位置 |
+|---|---|
+| `plate_angular_width_deg(dist)` | :21 |
+| `fire_tolerance_deg(dist)` | :29 |
+| `fire_decision(...)` | :35 |
+
+**容差随距离缩放**（同一个角度误差在不同距离含义完全不同）：
+
+```
+2m → 板角宽 4.0°，容差 0.45×4.0 = 1.8°
+5m → 板角宽 1.55°，容差 0.45×1.55 = 0.70°
+8m → 板角宽 1.0°，容差 0.45×1.0 = 0.45°
 ```
 
-- `yolo=0` → 检测不到（降 `conf` / `enemy` 拖到 2 不过滤）
-- `yolo≥1 solved=0` → 解算失败（角点或几何校验）
-- `yolo≥1 solved≥1 locked=0` → 跟踪器不确认（`TRACK_ASSOC_PX` 太紧）
+**⚠️ 单位陷阱（我连续错两次）**：
+`plate_angular_width_deg()` 返回**全宽**，而 `fire_tolerance_deg()` 的值是**半角**。
+所以 `FIRE_TOL_FRAC > 0.5` 就等于"允许瞄准点偏出板外"。
+0.80 = 离板心 108mm（板半宽 67.5mm）→ 必然打空隙。
 
 ---
 
-### 4. `include/tracker.hpp` —— 三态状态机
+### 2.6 执行层
+
+#### `include/gimbal.hpp`（476 行）
+**伺服控制律 —— 全项目最该读懂的文件。**
+
+| 函数 | 位置 |
+|---|---|
+| `track(theta_yaw, theta_pitch)` | :156 |
+| `stop_tracking()` | :340 |
+| `resync_switch(y, p)` | :146 |
+| `apply_envelope()` | :414 |
+| `smooth(in, state)` | :485 |
+
+**`track()` 的控制律（五步）：**
 
 ```
-DETECT ──(连续 2 帧命中)──► TRACK ──(连续 30 帧丢)──► LOST
-   ▲                          │                        │
-   └──────────────────────────┴────────────────────────┘
+1) 偏角低通   ty = smooth(theta)                     // smooth_coef = 0.35
+2) 去偏        ty_aim = ty - aim_offset              // 枪口与光轴不平行
+3) 限幅修正    cy = clamp(DIR * ty_aim * gain * ramp, ±6°)
+4) 命令        cmd = meas_lp + cy                    // meas_lp = 实测角低通(0.10)
+5) 限位 + 变化率限制  cmd = clamp(cmd, 行程); |cmd - prev| <= 3°/帧
 ```
 
-**为什么需要状态机**：单帧检测不可靠（抖动、漏检）。必须"连续看到几次"才认为真的锁定，
-"连续丢很多帧"才认为真的丢了。
+**四个设计点，每个都是踩坑换来的：**
 
-**关键参数**：
+| 设计 | 为什么 |
+|---|---|
+| `cmd = meas_lp + 限幅修正`（不是累积步进） | 累积步进会让 `cmd` 跑到 `meas` 前面 → 过冲 30° 把靶标甩出画面 |
+| 基准用**低通后的实测角** | 直接用 `meas` 会把编码器噪声继承进命令 → 极限环 |
+| `resync_switch()` | 换板时把 `meas_lp` 和偏角低通**对齐到真值**，否则基准滞后会让命令"幻影前进" → 过冲 |
+| 3°/帧变化率限制 | 削单帧突跳（抽动），稳态变化远小于此所以不影响跟踪 |
 
-| 参数 | 值 | 作用 |
-| --- | --- | --- |
-| `TRACK_CONFIRM_FRAMES` | 2 | 连续几帧才确认 |
-| `MAX_LOST_FRAMES` | 30 | 丢多少帧判丢失 |
-| `TRACK_ASSOC_PX` | 60 | 帧间关联门限（像素） |
+**注意 `apply_envelope()` 的包络在 config 里已被关闭**（`GIMBAL_ENVELOPE_DEG = 180`）。
 
-**`TRACK_ASSOC_PX` 为什么是 60 而不是 120**：5m 处板只有 43px 宽。120px 的关联范围意味着
-板旁边 100px 的顶灯会被当成"同一块板"跟踪上。**这是实际发生过的故障。**
+#### `include/protocol.hpp`（350 行）
+串口协议（《SRM 校内赛自瞄通信协议》）。
+
+| 功能 | 位置 |
+|---|---|
+| 组发送帧 | `pack_tx()` :96 附近 |
+| `SerialLink::set_target()` | :229 附近 |
+| 接收线程 / 解析 | :278 / :293 / :306 |
+| 状态结构 `Feedback` | :334 附近 |
+
+**报文格式（固定长度，无魔数无 CRC）：**
+
+```
+上→下 18 字节: body_len=16, ID1 = yaw/pitch (f32 x2), ID2 = fire_flag (i32)
+下→上 30 字节: body_len=28, ID1 = yaw/pitch/roll + mode/color,
+                          ID2 = bullet_speed (f32 x1)
+```
+
+- 独立 100 Hz 发送线程（`SERIAL_SEND_HZ`）
+- **`mode` 由遥控器决定**，`mode=0` 时下位机完全忽略 ID1
+- **`fire_flag` 只是"建议"**，实际发射需火控允许 + 人工许可
+
+#### `include/synth.hpp`（89 行）
+合成靶标：按 `ARMOR_W/ARMOR_H` 投影出 4 个角点，喂给完整链路做离线验证。测试全靠它。
 
 ---
 
-### 5. `include/select.hpp` —— 多块板选哪块
+### 2.7 程序入口
 
-旋转靶标在某些角度会**同时看到两块板**。如果每帧取"离画面中心最近的"，会在两块之间跳 → 云台左右抖。
+#### `src/main.cpp`（1067 行）—— **实车运行的主程序**
 
-**三条规则**：
+| 功能 | 行号 |
+|---|---|
+| 命令行解析 | 200~260 |
+| 加载 `aim_params.cfg` | ~370 |
+| 打印 `[EFFECTIVE]` 全量参数 | :410 |
+| 启动串口 + 相机 | 430~520 |
+| **YOLO 推理** | :546 |
+| 候选解算 + 跟踪 | ~600~680 |
+| **换板检测** | ~700 |
+| **圆心更新** | :719 |
+| **预测夹紧（s_dev_amp）** | :824 |
+| **开火判据** | :947 |
+| `[FIRE-DBG]` 诊断行 | :975 |
+| **下发命令** | :989 |
 
-```cpp
-cost = |yaw_raw| + 0.5 * |theta - last_theta|     // ① 板面朝向 + 连续性
-if (还能看到上次那块 && 新最优没有好 1.35 倍) 不换   // ②③ 迟滞 + 换门限
-```
+**参数优先级**：命令行 > `aim_params.cfg` > `config.hpp`
 
-**为什么用 `|yaw_raw|`**：它表示板面对相机的倾斜程度。更正对的板**有效命中面积最大**，
-这是物理判据，不是启发式。
+#### `src/aim_gui.cpp`（593 行）—— **可视化调参**
 
----
+三个窗口：`camera`（图 + 检测框）、`params`（发什么/收什么/差多少）、`knobs`（滑条）。
 
-### 6. `include/kf.hpp` —— 延迟补偿
+- 滑条 `x10` 编码：`off_*` 的 100 = 0 度；`dir_*` 的 0 = -1
+- **按 `s` 保存到 `aim_params.cfg`，按 `q` 退出**
+- 瞄准决策已改为调用 `AimCore`（与实车同一份实现）
+- `createTrackbar` 只拷贝初值，所以 `load_knobs()` 后必须 `sync_trackbars()`
 
-**为什么需要**：整条链路（曝光→取流→推理→PnP→串口→下位机执行）约 60~100ms。
-目标以 0.4 rad/s 横移时，100ms 就是 2.3° 滞后，而 5m 处板只有 1.5° 宽 —— **不补偿必打偏**。
+#### 其它工具（都在 `src/`）
 
-**两状态卡尔曼**（角度 + 角速度）：
-
-```cpp
-predict(dt):  theta += omega*dt
-update(z):    标准 KF 更新
-predict_ahead(L):  theta + omega*L      ← 这就是下发的瞄准角
-```
-
-**三个保护**（都实际用过）：
-
-| 保护 | 原因 |
-| --- | --- |
-| 新息门限 12° | 单帧 200° 的误检会把 `theta` 拽飞（实测跳变 26.9°） |
-| 角速度限幅 90°/s | 物理上不像装甲板 |
-| 外推限幅 8° | 速度不可靠时不要把角度推飞 |
-
-**怎么调试**：`aim_gui` 里 `raw meas` vs `after KF` 并列显示，`latency` 滑条实时改外推量。
-
----
-
-### 7. `include/gimbal.hpp` —— ★核心控制律（最重要，必须能默写）
-
-```cpp
-bool track(float theta_yaw, float theta_pitch) {
-    // 1) 低通实测角（抑制编码器噪声，否则云台在追自己的传感器抖动）
-    meas_lp = meas_lp*(1-k) + meas*k;
-
-    // 2) 去安装偏差（枪口和光轴不平行）
-    ty_aim = theta - aim_offset;
-
-    // 3) 修正量 + 限幅（唯一限速）
-    cy = clamp(DIR * ty_aim * gain * ramp, -6°, +6°);
-
-    // 4) 命令 = 低通实测角 + 修正
-    cmd = meas_lp + cy;
-
-    // 5) pitch 限位（防撞限位/堵转）
-    cmd_pitch = clamp(cmd_pitch, -33.8, +24.1);
-}
-```
-
-**三个设计决定，每个都有血泪史**：
-
-**① 为什么是 `meas + cy` 而不是在累积的 cmd 上做速率限制？**
-> 早期版本：`cmd = step_toward(cmd, want, 2°/帧)`。cmd 以恒速前进，而 `meas` 因机械惯性在后面追
-> → 两者差 25~33°，云台冲过头 30° 把靶标甩出画面。现在结构上**不可能累积**。
-
-**② 为什么基准要用低通后的 `meas`？**
-> 用瞬时 `meas` 等于把编码器噪声直接放进命令 → 云台追自己的噪声 → 静止靶也左右/上下晃（极限环）。
-> `measLP` 现场定在 8~14 之间。
-
-**③ 为什么 pitch 要留 2° 余量？**
-> 命令角发到正好等于行程末端并持续顶住 → 电机堵转 → 之后连反向命令都不响应，只能断电重启。
-> **实际发生过**：pitch 卡在 +26.02（上限 26.1）后完全失效。
-
-**其它保护**：
-
-| 机制 | 作用 |
-| --- | --- |
-| 软启动 20 帧 | 进跟踪时增益 0→1，切换瞬间不猛拽 |
-| 死区（现场设 0） | 小偏差不动；但有低通就够了，死区反而降低精度 |
-| 发散保护 | `\|theta\|` 连续 40 帧增大 → 停机报警。**可自愈**（theta 变小或新会话时恢复） |
+| 文件 | 用途 |
+|---|---|
+| `cam_view.cpp` | 只看相机和检测，不动云台 |
+| `detect_probe.cpp` | 只打印检测结果（离线排查 YOLO） |
+| `gimbal_test.cpp` | 单独测云台通道（`--query` / `--step` / `--hold`） |
+| `servo_calib.cpp` | **测量伺服方向符号**（当初靠它定出 yaw=-1/pitch=+1） |
+| `calibrate.cpp` | 相机内参标定 |
+| `yolo_test.cpp` | 单独测模型加载 |
 
 ---
 
-### 8. `include/fire.hpp` + `protocol.hpp` —— 开火判据与通信
+## 三、自瞄逻辑：四个阶段
 
-**开火 8 个条件**（每条都是"没有它就可能打错"）：
-
-```cpp
-ENABLE_FIRE / locked / mode==1 / 回传新鲜 /
-距离 (0.5, 8] / 弹速有效 / 连续 8 帧 / |残余误差| ≤ 容差
-```
-
-**容差必须随距离缩放**（板 140mm，角宽 `2·atan(0.07/dist)`）：
-
-| 距离 | 板角宽 | 容差(0.6×，打板中央) |
-| --- | --- | --- |
-| 2 m | 4.0° | 2.4° |
-| **5 m** | **1.5°** | **0.9°** |
-| 8 m | 1.0° | 0.6° |
-
-**为什么用"残余误差"不是 `theta`**：
-> 枪口在相机下方，所以要预设 `aim_offset`。正确瞄准时目标**本来就不在光轴上**，
-> `theta` 稳态 ≈ offset ≠ 0。判据如果看 `theta`，就永远停火。**实际踩过。**
-
-**协议**（18B 上行 / 30B 下行，小端，无 CRC，靠 length 字段流式组帧）：
+### 阶段 1：检测（`yolo_detector` + `yolo_armor`）
 
 ```
-上→下: [len:i16=16][id1:i16][yaw:f32][pitch:f32][id2:i16][fire:i32]
-下→上: [len:i16=28][id1:i16][yaw/pitch/roll:3×f32][mode:i32][color:i32][id2:i16][bullet:f32]
+1440×1080 BayerRG8
+   ↓ Bayer → BGR
+   ↓ resize 到 416×416
+   ↓ OpenVINO 推理
+   ↓ 输出 [1,14,3549]
+   ↓ 解出 N 个 (类别, 置信度, 4 个角点)
+   ↓ 按敌我颜色过滤 + NMS
+Armor[] {pt[4], color, conf}
 ```
 
-**规则约束**：`fire_flag` 只是**视觉侧请求**，实际发射要 **火控允许 + 人工许可**（下位机实现）。
+**判据**：`armor=1.4` 表示平均检出 1.4 块板；`armor=0` 就是没检到。
+
+### 阶段 2：解算（`solver`）
+
+```
+4 个角点 → solvePnP(135×56 模型) → rvec, tvec
+         → yaw   = atan2(x, z)
+         → pitch = atan2(y, z)
+         → dist  = |tvec|
+```
+
+**这一步的精度决定了后面一切。** 几何模型（135×56）错一点，`pitch` 就系统性偏。
+
+### 阶段 3：决策（`tracker` → `select` → `aim_core` → `fire`）
+
+```
+tracker:  跨帧关联 → locked / state
+select:   选哪块板 → follow
+aim_core: 盯圆心 + 偏差外推 → theta_yaw / theta_pitch
+fire:     该不该开火 → fire_ok
+```
+
+**盯圆心策略（当前使用）的物理依据：**
+
+板在半径 R 处绕竖轴转，方位偏移：
+```
+θ(φ) = atan( R·sinφ / d )
+φ=0（正对镜头）时 θ=0  ←  板正对时方位恰好等于圆心方位
+```
+
+所以**云台盯住圆心，板会自己转到瞄准点上**。
+
+精度余量：
+```
+dθ/dφ = R/d ≈ 0.2/5 = 0.04
+飞行 0.24s 内转 7.2° → 方位只变 0.29°  （板宽 1.55°）
+```
+
+**开火门控**：用"本帧是否检出板"（`follow >= 0`）而不是 `tr.locked`，
+质量过滤交给连续帧数 `FIRE_LOCK_FRAMES = 3`。
+
+### 阶段 4：执行（`gimbal` → `protocol`）
+
+```
+aim_core 输出 theta
+   → gimbal.track() 算出 cmd_yaw/cmd_pitch
+   → protocol.set_target(cmd_yaw, cmd_pitch, fire_flag)
+   → 100 Hz 线程发 18 字节
+   → 下位机执行（mode=1 才理会）
+   → 回传 30 字节（含实测 yaw/pitch/roll）
+```
+
+**闭环就在这里合上**：回传的实测角变成下一帧的 `meas`，`theta` 因此变小。
 
 ---
 
-## 三、四种调试方法
+## 四、相关功能对应哪些测试
 
-### 方法 1：可视化调参（首选）
-
-```bash
-cd ~/myaim && ./1_调参.sh
-```
-
-三个窗口：`camera`（图传+框+光轴十字）/ `params`（收发量+参数）/ `knobs`（滑条）
-
-**看什么**：
-
-| 字段 | 意义 | 正常 |
-| --- | --- | --- |
-| `pnp-pixel` | PnP 与像素算的偏角差 | `match`（差<2°） |
-| `cmd - fb` | 命令与实测差 | ≤6°（单帧修正上限） |
-| `judge` | 跟没跟上 | `ok` |
-| `mode` | 自瞄开关 | `1 VISION ON` |
-| `detect` | yolo/solved/locked | 逐个排查 |
-
-### 方法 2：日志
-
-```bash
-./build/my_aim --fire --debug               # 每 30 帧一行
-./build/my_aim --log-every 5 --debug        # 每 5 帧
-```
-
-启动先看 `[EFFECTIVE]` —— **本次实际生效的全部参数**，避免"以为改了这个值"。
-
-日志字段（顺序已逐项对齐，这是踩过三次坑的地方）：
-
-```
-f bars armor solved locked state | want cmd fb home mode th | lock_age rx resync wd
-```
-
-**关键**：`cmd` 与 `fb` 应一起朝目标走；`th` 应逐渐趋 0。
-
-### 方法 3：离线测试（不需要硬件）
-
-```bash
-ctest --test-dir build --output-on-failure
-```
-
-| 测试 | 验证什么 |
-| --- | --- |
-| `test_protocol` | 组帧/解帧、字节序、重同步 |
-| `test_solver` | PnP 往返精度 |
-| `test_armor` | 角点排序（不能蝴蝶结） |
-| `test_tracker` | 三态转换、关联 |
-| `test_closed_loop` | **闭环收敛**（合成目标，残余<0.9°） |
-| `test_fire` | 容差缩放、8 个门控逐个否决 |
-| `test_kf` | 卡尔曼预测误差、离群抑制 |
-| `gimbal_edge` | 包络/回绕/限位边界 |
-
-**改完代码先跑这个**，比上车快得多。
-
-### 方法 4：单工具
-
-```bash
-./build/gimbal_test --query                 # 只读云台姿态
-./build/gimbal_test --step yaw 20           # 在当前角基础上走 20°
-./build/gimbal_test --hold                  # 保持当前角(不接受参数!)
-./build/cam_view --hold-current             # 只成像, 不动云台
-```
-
-> ⚠️ `gimbal_test --hold` **不接受目标角参数**，它只发"当前角"。我曾误用它做方向测试，
-> 结论全错。要"走到某个角"用 `--step`。
-
----
-
-## 四、故障对照表（现象 → 查哪里）
-
-| 现象 | 先查 | 具体 |
-| --- | --- | --- |
-| 相机打不开，`-2147483133` | 进程占用 | `pkill -f 'build/'` |
-| 云台完全不动 | `mode` | `mode=0` 时下位机忽略一切角度 |
-| 追不到板，一直跑飞 | `cmd` vs `fb` | 差很大 = 命令发了但不跟 → 堵转/限位 |
-| 左右抖 | `measLP`、`deadband` | 云台在追编码器噪声 |
-| 上下抖 | `dirPitch` | 符号错 → 正反馈 |
-| 停在半路不动 | 发散保护 | 看有没有 `[GIMBAL][ERR] 偏差连续增大` |
-| 一直停火 | 残余误差 | `[FIRE] 停火` 前后对比 `误差` 与 `容差` |
-| 锁到灯/反光 | `enemy`、`conf` | 拖 `enemy` 到 2 试；升 `conf` |
-| 两板左右跳 | `select.hpp` | 迟滞门限 |
-
----
-
-## 五、验收可能被问的问题
-
-**Q: 为什么不用完整的 3D 卡尔曼/EKF？**
-> 做过，且 vendor 了同济的 11 维旋转模型并编译通过。但**从未接入主流程**，因为
-> 实测精度不够（预测误差 1.53°，而 5m 处半板宽 0.8°）。根因是**可观性**：
-> 6 rad/s 下每帧相位只走 0.1 rad、板位移 12mm，而 PnP 位置噪声 ~40mm，
-> 噪声比运动大，转速估不准（偏 10%）。参数扫描证明这是瓶颈不是调参问题。
-> 已删除以免混淆，但推理和数据留在 `DEBUG_LOG.md` 和 git 标签里。
-
-**Q: 命中率多少？**
-> 5 米处静止靶 100%，低速旋转 75%，超高转速跟不上（同上可观性原因）。
-
-**Q: 下坠怎么补偿的？**
-> **不用公式，用固定的距离标定。** 终验只有 5m，所以 253mm 下坠是个常数，
-> 直接并进 `AIM_PITCH_OFFSET_DEG = 3.7`（含安装偏差）。这样不依赖弹速，
-> 而弹速在裁判系统未接入时是未知的（回传 0）。换成公式反而引入误差。
-
-**Q: 枪口和相机不平行怎么办？**
-> 用一个常值 `aim_offset` 补偿。本质是相机系和云台系之间的固定旋转。
-> 标定方法是**打靶看落点**，不是看 `theta`——因为正确瞄准时目标本来就不在光轴上。
-
-**Q: 如果符号又不对了怎么办？**
-> GUI 里有 `dirYaw`/`dirPitch` 滑条，拨一下一秒见效，不用重编译。
-> 但**判据要看 `theta` 是否收敛**，不能看云台"往哪转"（我在这上面栽了很多次）。
-
----
-
-## 六、VSCode 环境
-
-### 推荐：用 Remote - WSL 打开（IntelliSense 才准）
+**8 套单元测试，全部可离线跑：**
 
 ```bash
 # WSL 里
-cd ~/my_aim && code .
+cd ~/my_aim && ctest --test-dir build
+# 或单个跑
+./build/tests/test_solver
 ```
 
-这样 `opencv2/...`、海康 SDK 的头文件都能解析。Windows 侧没有这些库，会满屏红波浪线。
+| 测试 | 测什么 | 对应源码 |
+|---|---|---|
+| `tests/test_solver.cpp` | PnP：距离扫描 1~7m、角度符号、退化拒绝 | `solver.hpp` |
+| `tests/test_armor.cpp` | 角点排序、颜色过滤、退化判定 | `armor.hpp` `yolo_armor.hpp` |
+| `tests/test_tracker.cpp` | 跨帧关联、确认帧数、丢失帧数 | `tracker.hpp` |
+| `tests/test_kf.cpp` | 匀速跟踪精度、噪声抑制、离群拒绝、限幅 | `kf.hpp` |
+| `tests/test_closed_loop.cpp` | **完整闭环**：合成靶标 → 检测 → 解算 → 控制 → 收敛 | 全链路 |
+| `tests/test_fire.cpp` | 容差随距离缩放、各条否决条件 | `fire.hpp` |
+| `tests/test_protocol.cpp` | 18/30 字节报文、字段偏移、小端 | `protocol.hpp` |
+| `tests/gimbal_edge.cpp` | 行程限位、死区、极限环、发散保护 | `gimbal.hpp` |
 
-### 已有调试配置（`.vscode/launch.json`）
+**调试用工具（需要硬件或视频）：**
 
-- 调试 `my_aim`（闭环）
-- 调试 `cam_view`（实时成像，注意需要 `DISPLAY`）
-- 调试 `detect_probe`（单帧诊断）
-- 调试当前打开的单元测试
-
-### 构建快捷键
-
-`Ctrl+Shift+B` → `cmake --build build -j2`（见 `tasks.json`）
+| 工具 | 用法 |
+|---|---|
+| `tests/box_probe` | `--img 图.jpg` / `--video 视频.mp4` 打印检测框宽高比，验证 `ARMOR_H` |
+| `tests/synth_dump` | 把合成靶标存成图片，看检测器认不认 |
+| `detect_probe` | 离线跑检测，看框和置信度 |
 
 ---
 
-## 七、最小知识清单（自测）
+## 五、五种调试方法
 
-能答出下面这些，就够讲清整套逻辑了：
+| 方法 | 命令 | 用途 |
+|---|---|---|
+| **可视化调参** | `./build/aim_gui` | 看图 + 拖滑条，首选 |
+| **日志** | `./build/my_aim --fire --debug` | 看 `th` 是否收敛、`[FIRE-DBG]` 哪条不满足 |
+| **离线测试** | `ctest --test-dir build` | 改完代码先跑，比上车快 10 倍 |
+| **单工具** | `./build/gimbal_test --step yaw 20` | 只验一个通道 |
+| **合成靶标** | `./build/my_aim --synth --bearing 20` | 不碰硬件验证锁定 |
 
-1. 从相机到云台指令，经过哪几个文件？（7 个，见第一张图）
-2. `theta_yaw > 0` 是什么意思？（目标在光轴右侧）
-3. 控制律的三个常数分别管什么？（`DIR` 方向、`gain` 比例、`MAX_CORR` 限幅）
-4. 为什么命令用"低通实测角"而不是瞬时值？（否则追自己的噪声）
-5. `ARMOR_H = 57` 是什么？（keypoint 的实际竖向跨度，不是板高）
-6. 开火容差为什么随距离变？（板角宽随距离变小）
-7. `fire_flag=1` 子弹出膛了吗？（没有，还需要火控+人工许可）
-8. `ARMOR_H` 错了会怎样？（PnP 强行加俯仰，pitch 不准）
-9. 发散保护怎么解除？（theta 变小，或新一次跟踪会话）
-10. 5m 标定了什么？（`AIM_PITCH_OFFSET_DEG=3.7`，吸收安装偏差+下坠）
+### 日志字段怎么读
+
+`[DET]` 行：
+```
+f=540         帧号
+armor=1.4     平均检出板数（0 = 没检到）
+locked=1.0    跟踪置信度（**不可靠，仅供参考**）
+state=TRACK   跟踪状态
+want=-38.4    命令角
+cmd=321.6     （含回绕的）命令角
+fb=-38.2      下位机回传实测角
+mode=1        自瞄开关（遥控器控制）
+th=0.3/3.7    当前偏角 yaw/pitch  ← **最重要的两个数**
+lock_age=0    丢了几帧
+```
+
+`[LEAD]` 行：
+```
+外推 324 ms (链路80 + 飞行244)   总外推时长
+提前量 0.00/0.02 度             实际施加的补偿（盯圆心下 yaw 恒 0）
+角速度 0.04/0.09 度每秒
+dist=5.13 m
+```
+
+`[FIRE-DBG]` 行：
+```
+locked=1  streak=3  err=0.42  tol=1.13  dist=5.50  speed=22.0
+                     ↑         ↑
+              实际偏差   容差(半角)
+```
+**`err <= tol` 且 `streak >= FIRE_LOCK_FRAMES` 才会开火。**
+
+---
+
+## 六、故障对照表
+
+| 现象 | 查哪里 | 具体 |
+|---|---|---|
+| 相机打不开 / `-2147483133` | 进程占用 | `pkill -f 'build/'` |
+| `mode=0` 云台不动 | 不是 bug | 遥控器没开自瞄，下位机忽略指令 |
+| 一直 `[FIRE] 停火` | `[FIRE-DBG]` 行 | 看 `locked/streak/err/tol/dist` 哪条不满足 |
+| `err` 恒定远大于 `tol` | 圆心估计 | 圆心被换板带偏 → `CENTER_LP_COEF` |
+| 打在两板之间 | `FIRE_TOL_FRAC` | >0.5 就允许偏出板外 |
+| 云台抽动 | `SERVO_GAIN` | 1.0 会进极限环，应为 0.80 |
+| 上下抖 | pitch 提前量 | `KF_LEAD_PITCH` 必须 false |
+| 换板后过冲 | `resync_switch()` | `meas_lp` 滞后导致命令幻影前进 |
+| 换板后抽动 | `KF_LEAD_SUPPRESS_DEG` | 追赶时 `theta` 变化不可信 |
+| `pitch` 摆 ±14° | `solve_pose()` | PnP 双解翻转，靠上一帧初值 |
+| 距离解不准 | `ARMOR_W/H` | keypoint 标的是灯条区域 135×56，不是板 140×125 |
+| 画面卡但追踪正常 | `DISPLAY_EVERY_N` | 显示节流，不影响控制 |
+
+---
+
+## 七、验收可能被问的问题
+
+**Q：为什么 `ARMOR_H` 是 56 而不是板高 125？**
+> YOLO 的 4 个 keypoint 标的是**灯条区域**的四角，不是整块板。灯条长 56mm。
+> 对齐同济的 `SMALL_ARMOR_POINTS{135, 56}`。交叉验证：5.4m 处 box 47×19px，
+> 理论宽 140×1807/5400=47px ✓、高 56×1807/5400=19px ✓。
+> 填 125 会让 PnP 拿宽高比 1.12 去拟合 2.55 的四边形，只能强行加俯仰 → pitch 不准。
+
+**Q：为什么用盯圆心而不是追最优板？**
+> 追板要求精确预测转速与相位，任何误差都变成打空隙（实测低速 75%，高速不可用）。
+> 盯圆心利用"板正对时方位=圆心方位"这个几何事实，而且圆心附近 `dθ/dφ = R/d = 0.04`，
+> 飞行期间方位只变 0.29° 而板宽 1.55° —— **容差是误差的 5 倍**。
+> 不需要精确转速。
+
+**Q：为什么不用完整 EKF？**
+> 做过（同济 11 维模型，编译通过），实测预测误差 **1.53°**，
+> 而 5m 处板半宽只有 **0.77°** —— 精度不够。
+> 根因是**可观性**：6 rad/s 下每帧板只位移 12mm，PnP 位置噪声约 40mm。
+
+**Q：两个伺服轴符号为什么相反？**
+> "命令角增大"对两轴是相反的物理动作：yaw 增大向左，pitch 增大向下。
+> 靠 `servo_calib` 实测确定：yaw = -1（偏角 5.26° → 0.51°），pitch = +1。
+
+**Q：下坠怎么补偿？**
+> **不用公式**。5m 是固定距离，253mm 下坠是常数，并进 `AIM_PITCH_OFFSET_DEG = 3.7`。
+> 不依赖弹速（裁判系统未接入时回传 0.00，用公式反而引入误差）。
+
+**Q：为什么 `fire_flag` 只是建议？**
+> 协议规定：视觉侧只能表达"建议开火"，实际发射需**火控允许 + 人工许可**。
+> 所以 `ENABLE_FIRE` 默认 false，必须 `--fire` 才允许输出 1。
+
+**Q：射速能达标吗？**
+> 实测 25 发/30 秒 = 0.833 发/秒，要求 50 发/60 秒 = 0.833 发/秒 —— **正好达标，余量为零**。
+> 开火窗口占空比 38%（`FIRE_TOL_FRAC=0.43`），理论上远超所需，
+> 所以瓶颈更可能在火控射速或人工许可键，不在视觉侧。
+
+---
+
+## 八、建议的阅读顺序（约 2 小时）
+
+```
+0:00-0:15   config.hpp          参数总表，理解每个量的物理含义
+0:15-0:25   fire.hpp            47 行，最短，先建立"容差"的概念
+0:25-0:45   solver.hpp          135×56 模型 + PnP 三个设计点
+0:45-1:05   kf.hpp              reseed / predict_ahead / 单位
+1:05-1:25   aim_core.hpp        盯圆心 + 偏差外推
+1:25-1:55   gimbal.hpp          ★ track() 的五步控制律，必须能默写
+1:55-2:10   main.cpp            只看 :546 / :700 / :947 / :989 四处
+2:10-2:20   tests/              跑 ctest，看每套测什么
+```
+
+**`gimbal.hpp` 的 `track()`（:156）是必须能默写的一段** —— 那是整个项目的核心。
+
+---
+
+## 九、自测题
+
+1. `theta` 是什么？为什么让它趋于 0 就是控制目标？
+2. `cmd = meas_lp + 修正` 为什么不能写成"累积步进"？
+3. `reseed()` 和 `reset()` 在换板时的行为差别是什么？为什么前者对？
+4. `FIRE_TOL_FRAC = 0.8` 为什么必然打空隙？（算一下 5m 处离板心多少 mm）
+5. 盯圆心策略为什么不需要精确转速？用 `dθ/dφ` 解释。
+6. `KF_LEAD_PITCH = false` 的原因是什么？
+7. PnP 的"两个解"指什么？怎么保证不翻转？
+8. `ARMOR_H = 56` 和板高 125 的关系？
+9. 开火判据里 `fire_flag` 为什么只是"建议"？
+10. 8 套测试分别覆盖哪一层？如果改 `gimbal.hpp` 该跑哪个？
+
+**答案都能在本文档和代码注释里找到。**
