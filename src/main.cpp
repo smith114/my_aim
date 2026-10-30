@@ -741,8 +741,20 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 // pitch 不外推(见 KF_LEAD_PITCH 的说明): 该轴无真实运动,
                 // 外推只会把噪声/自激放大成云台的实际动作。
                 theta_pitch = KF_LEAD_PITCH ? kf_pitch.predict_ahead(t_lead) : kf_pitch.theta();
-                lead_yaw = theta_yaw - raw_yaw;    // 实际施加的提前量(开火判据要扣掉)
-                lead_pitch = theta_pitch - raw_pitch_ex;   // 关掉时接近 0
+                // 对提前量本身做低通: 角速度估计逐帧在跳, 但真实转速是慢变量。
+                // 不滤的话提前量会翻号(yaw 实测 +3.8 -> -5.8 -> +2.7), 云台跟着摆。
+                static float s_lead_lp_y = 0.0f;
+                static float s_lead_lp_p = 0.0f;
+                const float raw_lead_y = theta_yaw   - raw_yaw;
+                const float raw_lead_p = theta_pitch - raw_pitch_ex;
+                s_lead_lp_y += KF_LEAD_LP_COEF * (raw_lead_y - s_lead_lp_y);
+                s_lead_lp_p += KF_LEAD_LP_COEF * (raw_lead_p - s_lead_lp_p);
+                // 换板时提前量不需要重置(转速连续), 所以不做 reset
+
+                lead_yaw   = s_lead_lp_y;                 // 实际施加的提前量
+                lead_pitch = s_lead_lp_p;
+                theta_yaw   = raw_yaw   + lead_yaw;       // 用低通后的提前量重建瞄准角
+                theta_pitch = raw_pitch_ex + lead_pitch;
             } else {
                 theta_yaw   = raw_yaw;
                 theta_pitch = raw_pitch;
@@ -861,6 +873,15 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                     (theta_pitch - gimbal.aim_offset_pitch) * (theta_pitch - gimbal.aim_offset_pitch))));
         } else if (!fire_ok && f_prev) {
             LOG("[FIRE] 停火\n");
+        }
+        // 每 log_every 帧打印一次判据的各项, 直接看出是哪一条在挡。
+        // 单独一行、5 个说明符, 不与多字段日志混排(那里错过三次)。
+        if (frame_cnt % log_every == 0) {
+            LOG("[FIRE-DBG] locked=%d streak=%d err=%.2f tol=%.2f dist=%.2f speed=%.1f\n",
+                tr.locked ? 1 : 0, fire_lock_streak,
+                static_cast<double>(std::sqrt(err_y * err_y + err_p * err_p)),
+                static_cast<double>(fire_tolerance_deg(f_dist > 0.1f ? f_dist : 1.0f)),
+                static_cast<double>(f_dist), static_cast<double>(f_speed));
         }
         const int32_t fire = fire_ok ? 1 : 0;
         link.set_target(gimbal.cmd_yaw, gimbal.cmd_pitch, fire);

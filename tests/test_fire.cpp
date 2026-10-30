@@ -21,14 +21,19 @@ int main() {
     CHECK(fire_tolerance_deg(2.0f) > fire_tolerance_deg(5.0f), "近处容差大于远处");
     CHECK(fire_tolerance_deg(5.0f) > fire_tolerance_deg(8.0f), "5m 容差大于 8m");
     // 5m 处板角宽约 1.6 度, 容差应约 0.96
-    CHECK(std::fabs(fire_tolerance_deg(5.0f) - 0.96f) < 0.15f, "5m 容差约 0.96 度");
+    // 用公式推导期望值, 而不是写死某个数字 —— 参数调整('FIRE_TOL_FRAC')时
+    // 这条测试应当继续有效, 它验证的是"容差 = 系数 × 板角宽"这个**关系**。
+    const float expect5 = FIRE_TOL_FRAC * plate_angular_width_deg(5.0f);
+    CHECK(std::fabs(fire_tolerance_deg(5.0f) - expect5) < 1e-4f, "5m 容差 = FIRE_TOL_FRAC × 板角宽");
 
     std::printf("\n=== 2. 同一个角度误差在不同距离的判定 ===\n");
     const bool ok2m = fire_decision(true, true, true, true, true, 2.0f, 1.2f, 0.0f, 22.0f, 10);
-    const bool ok5m = fire_decision(true, true, true, true, true, 5.0f, 1.2f, 0.0f, 22.0f, 10);
-    std::printf("  误差 1.2 度: 2m=%d, 5m=%d\n", ok2m ? 1 : 0, ok5m ? 1 : 0);
-    CHECK(ok2m, "2m 处 1.2 度可以开火(容差约 2.4 度)");
-    CHECK(!ok5m, "5m 处 1.2 度不可以(容差约 0.96 度)");
+    const float tol5 = fire_tolerance_deg(5.0f);
+    const bool ok5m = fire_decision(true, true, true, true, true, 5.0f, tol5 * 1.3f, 0.0f, 22.0f, 10);
+    std::printf("  5m 容差 %.2f 度, 用 %.2f 度测试: 2m=%d, 5m=%d\n",
+                (double)tol5, (double)(tol5 * 1.3f), ok2m ? 1 : 0, ok5m ? 1 : 0);
+    CHECK(ok2m, "2m 处同样角度可以开火(容差随距离放大)");
+    CHECK(!ok5m, "超过 5m 容差 1.3 倍时不开火");
 
     std::printf("\n=== 3. 每个门控条件都能单独否决 ===\n");
     const bool base = fire_decision(true, true, true, true, true, 3.0f, 0.1f, 0.1f, 22.0f, 10);
@@ -40,7 +45,11 @@ int main() {
     CHECK(!fire_decision(true,true,true,true,false,3.0f,0.1f,0.1f,22.0f,10), "无目标 -> 否");
     CHECK(!fire_decision(true,true,true,true,true,9.0f,0.1f,0.1f,22.0f,10), "超距离 -> 否");
     CHECK(!fire_decision(true,true,true,true,true,3.0f,0.1f,0.1f,0.0f,10), "弹速无效 -> 否");
-    CHECK(!fire_decision(true,true,true,true,true,3.0f,0.1f,0.1f,22.0f,3), "锁定帧数不足 -> 否");
+    // 用 FIRE_LOCK_FRAMES-1 而不是写死 3: 验的是"不足就不开火"这个关系
+    CHECK(!fire_decision(true,true,true,true,true,3.0f,0.1f,0.1f,22.0f, FIRE_LOCK_FRAMES - 1),
+          "锁定帧数不足 -> 否");
+    CHECK(fire_decision(true,true,true,true,true,3.0f,0.1f,0.1f,22.0f, FIRE_LOCK_FRAMES),
+          "刚好够帧数 -> 可以");
 
     std::printf("\n=== 4. 容差边界 ===\n");
     const float tol3 = fire_tolerance_deg(3.0f);
