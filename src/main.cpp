@@ -745,8 +745,23 @@ int   synth_distractors = 0;         // 随机亮斑干扰数量(考验误检抑
                 // 不滤的话提前量会翻号(yaw 实测 +3.8 -> -5.8 -> +2.7), 云台跟着摆。
                 static float s_lead_lp_y = 0.0f;
                 static float s_lead_lp_p = 0.0f;
-                const float raw_lead_y = theta_yaw   - raw_yaw;
-                const float raw_lead_p = theta_pitch - raw_pitch_ex;
+                float raw_lead_y = theta_yaw   - raw_yaw;
+                float raw_lead_p = theta_pitch - raw_pitch_ex;
+
+                // 云台正在追赶(|cmd - fb| 大)时, theta 的变化主要来自云台自身,
+                // 此刻的角速度估计虚高, 提前量会把云台推过头 -> 回正 -> 抽动。
+                // 所以追赶期间把"提前量目标"置 0, 由低通平滑衰减。
+                if (fb_fresh) {
+                    float fe_y = gimbal.cmd_yaw - fb.yaw;
+                    while (fe_y >  180.0f) fe_y -= 360.0f;
+                    while (fe_y < -180.0f) fe_y += 360.0f;
+                    const float fe_p = gimbal.cmd_pitch - fb.pitch;
+                    if (std::fabs(fe_y) > KF_LEAD_SUPPRESS_DEG ||
+                        std::fabs(fe_p) > KF_LEAD_SUPPRESS_DEG) {
+                        raw_lead_y = 0.0f;
+                        raw_lead_p = 0.0f;
+                    }
+                }
                 s_lead_lp_y += KF_LEAD_LP_COEF * (raw_lead_y - s_lead_lp_y);
                 s_lead_lp_p += KF_LEAD_LP_COEF * (raw_lead_p - s_lead_lp_p);
                 // 换板时提前量不需要重置(转速连续), 所以不做 reset
