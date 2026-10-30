@@ -27,13 +27,19 @@ int main() {
     CHECK(std::fabs(fire_tolerance_deg(5.0f) - expect5) < 1e-4f, "5m 容差 = FIRE_TOL_FRAC × 板角宽");
 
     std::printf("\n=== 2. 同一个角度误差在不同距离的判定 ===\n");
-    const bool ok2m = fire_decision(true, true, true, true, true, 2.0f, 1.2f, 0.0f, 22.0f, 10);
-    const float tol5 = fire_tolerance_deg(5.0f);
-    const bool ok5m = fire_decision(true, true, true, true, true, 5.0f, tol5 * 1.3f, 0.0f, 22.0f, 10);
-    std::printf("  5m 容差 %.2f 度, 用 %.2f 度测试: 2m=%d, 5m=%d\n",
-                (double)tol5, (double)(tol5 * 1.3f), ok2m ? 1 : 0, ok5m ? 1 : 0);
-    CHECK(ok2m, "2m 处同样角度可以开火(容差随距离放大)");
-    CHECK(!ok5m, "超过 5m 容差 1.3 倍时不开火");
+    // 取 2m 与 5m 容差的**中点**作为测试误差: 它在 2m 处合格、5m 处不合格,
+    // 正好验证"容差随距离放大"这个关系。用中点而不是写死角度,
+    // 这样调 FIRE_TOL_FRAC 时这条测试仍然成立(之前写死 1.2 度, 收紧后就假报错)。
+    const float tol5   = fire_tolerance_deg(5.0f);
+    const float tol2   = fire_tolerance_deg(2.0f);
+    const float mid    = 0.5f * (tol5 + tol2);
+    const bool ok2m    = fire_decision(true, true, true, true, true, 2.0f, mid, 0.0f, 22.0f, 10);
+    const bool ok5m    = fire_decision(true, true, true, true, true, 5.0f, mid, 0.0f, 22.0f, 10);
+    std::printf("  容差 2m=%.2f 度 5m=%.2f 度, 用中点 %.2f 度测试: 2m=%d, 5m=%d\n",
+                (double)tol2, (double)tol5, (double)mid, ok2m ? 1 : 0, ok5m ? 1 : 0);
+    CHECK(tol2 > tol5, "近处容差必须大于远处");
+    CHECK(ok2m, "中点角度在 2m 处合格");
+    CHECK(!ok5m, "中点角度在 5m 处不合格");
 
     std::printf("\n=== 3. 每个门控条件都能单独否决 ===\n");
     const bool base = fire_decision(true, true, true, true, true, 3.0f, 0.1f, 0.1f, 22.0f, 10);
